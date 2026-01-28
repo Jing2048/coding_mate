@@ -77,9 +77,18 @@ class AICodeGenServer:
         self.workspace_path = Path(workspace_path)
         self.db = PersistenceManager(workspace_path)
         
+        # V2 新组件
+        try:
+            from ai_codegen.mcp_server.persistence_v2 import PersistenceManagerV2
+            self.db_v2 = PersistenceManagerV2(workspace_path)
+        except Exception:
+            self.db_v2 = None
+        
         # 延迟加载的组件
         self._parser = None
         self._verifier = None
+        self._extractor = None
+        self._rag_manager = None
     
     @property
     def parser(self):
@@ -94,6 +103,24 @@ class AICodeGenServer:
             from ai_codegen.verifier import Verifier, VerificationConfig
             self._verifier = Verifier(config=VerificationConfig())
         return self._verifier
+    
+    @property
+    def extractor(self):
+        if self._extractor is None:
+            from ai_codegen.extractor import InterfaceExtractor
+            self._extractor = InterfaceExtractor(self.parser)
+        return self._extractor
+    
+    @property
+    def rag_manager(self):
+        if self._rag_manager is None:
+            try:
+                from ai_codegen.rag import RAGManager
+                self._rag_manager = RAGManager(str(self.workspace_path))
+            except Exception as e:
+                # RAG 系统不可用时返回 None
+                return None
+        return self._rag_manager
 
     # ========================================================================
     # Tool: index
@@ -785,10 +812,11 @@ class AICodeGenServer:
         symbols: List[str] = None,
         max_tokens: int = 8000,
         format: str = "structured",  # structured / prompt
-        depth: int = 1  # 依赖遍历深度
+        depth: int = 1,  # 依赖遍历深度
+        mode: str = "dependency"  # dependency / rag / full
     ) -> Dict[str, Any]:
         """
-        获取实现任务的上下文
+        获取实现任务的上下文（支持 RAG 模式）
         
         Args:
             task_id: 任务 ID
@@ -797,10 +825,44 @@ class AICodeGenServer:
             max_tokens: 最大 token 数
             format: 输出格式 - structured(结构化) / prompt(可直接用于prompt)
             depth: 依赖遍历深度
+            mode: 模式 - dependency(依赖图) / rag(语义搜索) / full(两者结合)
         
         Returns:
             上下文信息
         """
+        # 如果使用 RAG 模式且有 RAG Manager
+        if mode in ("rag", "full") and self.rag_manager:
+            task_description = ""
+            if task_id:
+                task = self.db.get_task(task_id)
+                if task:
+                    task_description = f"{task.title}: {task.description}"
+            
+            # 使用 RAG 检索
+            rag_context = self.rag_manager.retrieve_context(
+                task_description=task_description or "代码实现任务",
+                max_interfaces=5,
+                max_dependencies=10,
+                include_examples=True
+            )
+            
+            if format == "prompt":
+                return {
+                    "text": rag_context.get("formatted_context", ""),
+                    "mode": "rag",
+                    "interfaces": [e.to_dict() for e in rag_context.get("interfaces", [])],
+                    "suggestions": rag_context.get("suggestions", [])
+                }
+            else:
+                return {
+                    "mode": "rag",
+                    "interfaces": [e.to_dict() for e in rag_context.get("interfaces", [])],
+                    "dependencies": rag_context.get("dependencies", []),
+                    "suggestions": rag_context.get("suggestions", []),
+                    "formatted_context": rag_context.get("formatted_context", "")
+                }
+        
+        # 原有的依赖图模式
         # Token 预算分配
         budget = {
             "task": int(max_tokens * 0.1),       # 10% 任务描述
@@ -866,6 +928,7 @@ class AICodeGenServer:
         )
         context["summary"]["tokens_used"] = tokens_used
         context["summary"]["budget"] = budget
+        context["mode"] = "dependency"
         
         # 根据格式返回
         if format == "prompt":
@@ -1276,6 +1339,234 @@ Target files: {', '.join(task.get('files', []))}
         """生成唯一 ID"""
         import time
         return f"{int(time.time() * 1000)}"
+    
+    # ========================================================================
+    # Tool: extract_interfaces (V2)
+    # ========================================================================
+    
+    async def tool_extract_interfaces(
+        self,
+        paths: List[str],
+        force: bool = False
+    ) -> Dict[str, Any]:
+        """
+        从代码提取接口定义
+        
+        Args:
+            paths: 要提取的文件路径列表
+            force: 是否强制重新提取
+        
+        Returns:
+            提取统计信息
+        """
+        if not self.db_v2:
+            return {"error": "V2 persistence not available"}
+        
+        extracted = []
+        errors = []
+        
+        for path in paths:
+            file_path = self.workspace_path / path
+            if not file_path.exists():
+                errors.append(f"File not found: {path}")
+                continue
+            
+            try:
+                entities = self.extractor.extract_from_file(str(file_path))
+                for entity in entities:
+                    self.db_v2.save_entity(entity)
+                    extracted.append(entity.id)
+            except Exception as e:
+                errors.append(f"{path}: {str(e)[:100]}")
+        
+        stats = self.db_v2.get_statistics()
+        
+        return {
+            "extracted": len(extracted),
+            "entities": extracted[:20],  # 限制返回数量
+            "total_entities": stats["total_entities"],
+            "total_dependencies": stats["total_dependencies"],
+            "errors": errors[:5] if errors else []
+        }
+    
+    # ========================================================================
+    # Tool: get_interface (V2)
+    # ========================================================================
+    
+    async def tool_get_interface(
+        self,
+        interface_id: str,
+        include_contracts: bool = True,
+        include_dependencies: bool = True
+    ) -> Dict[str, Any]:
+        """
+        获取接口详情
+        
+        Args:
+            interface_id: 接口 ID
+            include_contracts: 是否包含契约
+            include_dependencies: 是否包含依赖关系
+        
+        Returns:
+            接口详情
+        """
+        if not self.db_v2:
+            return {"error": "V2 persistence not available"}
+        
+        entity = self.db_v2.get_entity(interface_id)
+        if not entity:
+            return {"error": f"Interface '{interface_id}' not found"}
+        
+        result = entity.to_dict()
+        
+        if include_dependencies:
+            deps = self.db_v2.get_dependencies(interface_id)
+            result["dependencies"] = deps
+            
+            dependents = self.db_v2.get_dependents(interface_id)
+            result["dependents"] = dependents
+        
+        # 格式化 LLM 输出
+        result["llm_format"] = entity.format_for_llm(
+            include_dependencies=include_dependencies,
+            include_examples=True
+        )
+        
+        return result
+    
+    # ========================================================================
+    # Tool: list_interfaces (V2)
+    # ========================================================================
+    
+    async def tool_list_interfaces(
+        self,
+        module: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        domain: Optional[str] = None,
+        limit: int = 50
+    ) -> Dict[str, Any]:
+        """
+        列出接口
+        
+        Args:
+            module: 按模块过滤
+            entity_type: 按实体类型过滤
+            domain: 按领域过滤
+            limit: 返回数量限制
+        
+        Returns:
+            接口列表
+        """
+        if not self.db_v2:
+            return {"error": "V2 persistence not available"}
+        
+        if module:
+            entities = self.db_v2.get_entities_by_module(module)
+        elif entity_type:
+            entities = self.db_v2.get_entities_by_type(entity_type)
+        else:
+            # 使用搜索（简单实现）
+            entities = self.db_v2.search_entities("", limit=limit, domain=domain)
+        
+        return {
+            "total": len(entities),
+            "interfaces": [
+                {
+                    "id": e.id,
+                    "name": e.name,
+                    "type": e.type.value,
+                    "module": e.module,
+                    "description": e.description[:100],
+                    "domain": e.domain,
+                    "methods_count": len(e.signature.parameters) if e.signature else 0
+                }
+                for e in entities[:limit]
+            ]
+        }
+    
+    # ========================================================================
+    # Tool: search_interfaces (V2 RAG)
+    # ========================================================================
+    
+    async def tool_search_interfaces(
+        self,
+        query: str,
+        entity_type: Optional[str] = None,
+        domain: Optional[str] = None,
+        limit: int = 10,
+        use_hybrid: bool = False
+    ) -> Dict[str, Any]:
+        """
+        语义搜索接口
+        
+        Args:
+            query: 搜索查询
+            entity_type: 实体类型过滤
+            domain: 领域过滤
+            limit: 返回数量限制
+            use_hybrid: 是否使用混合搜索
+        
+        Returns:
+            搜索结果
+        """
+        if not self.rag_manager:
+            # 降级到 SQLite 搜索
+            if not self.db_v2:
+                return {"error": "RAG system not available"}
+            entities = self.db_v2.search_entities(query, limit=limit, entity_type=entity_type, domain=domain)
+            return {
+                "total": len(entities),
+                "results": [e.to_dict() for e in entities],
+                "mode": "sqlite_fallback"
+            }
+        
+        # 使用 RAG 搜索
+        entities = self.rag_manager.search(
+            query=query,
+            limit=limit,
+            entity_type=entity_type,
+            domain=domain,
+            use_hybrid=use_hybrid
+        )
+        
+        return {
+            "total": len(entities),
+            "results": [e.to_dict() for e in entities],
+            "mode": "rag_hybrid" if use_hybrid else "rag_semantic"
+        }
+    
+    # ========================================================================
+    # Tool: sync_rag (V2 RAG)
+    # ========================================================================
+    
+    async def tool_sync_rag(
+        self,
+        force: bool = False
+    ) -> Dict[str, Any]:
+        """
+        同步 SQLite 数据到向量数据库
+        
+        Args:
+            force: 是否强制重新同步
+        
+        Returns:
+            同步结果
+        """
+        if not self.rag_manager:
+            return {"error": "RAG system not available"}
+        
+        try:
+            self.rag_manager.sync_from_persistence(force=force)
+            stats = self.rag_manager.get_stats()
+            return {
+                "success": True,
+                "stats": stats
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
 
 # ============================================================================
@@ -1454,6 +1745,73 @@ def create_server(workspace_path: str) -> Server:
                 }
             ),
             Tool(
+                name="extract_interfaces",
+                description="从代码提取接口定义，构建 CodeEntity 并存储到数据库。",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "要提取的文件路径列表"
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "description": "是否强制重新提取（默认 false）"
+                        }
+                    },
+                    "required": ["paths"]
+                }
+            ),
+            Tool(
+                name="get_interface",
+                description="获取接口详情，包括签名、契约、依赖关系。",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "interface_id": {
+                            "type": "string",
+                            "description": "接口 ID（格式：module:Class.method 或 module:function）"
+                        },
+                        "include_contracts": {
+                            "type": "boolean",
+                            "description": "是否包含契约信息（默认 true）"
+                        },
+                        "include_dependencies": {
+                            "type": "boolean",
+                            "description": "是否包含依赖关系（默认 true）"
+                        }
+                    },
+                    "required": ["interface_id"]
+                }
+            ),
+            Tool(
+                name="list_interfaces",
+                description="列出所有接口，支持按模块、类型、领域过滤。",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "module": {
+                            "type": "string",
+                            "description": "按模块过滤"
+                        },
+                        "entity_type": {
+                            "type": "string",
+                            "enum": ["class", "function", "method", "module"],
+                            "description": "按实体类型过滤"
+                        },
+                        "domain": {
+                            "type": "string",
+                            "description": "按领域过滤"
+                        },
+                        "limit": {
+                            "type": "number",
+                            "description": "返回数量限制（默认 50）"
+                        }
+                    }
+                }
+            ),
+            Tool(
                 name="context",
                 description="获取实现任务的智能上下文，基于依赖图收集相关代码，支持 prompt-ready 格式输出。",
                 inputSchema={
@@ -1485,6 +1843,55 @@ def create_server(workspace_path: str) -> Server:
                         "depth": {
                             "type": "number",
                             "description": "依赖遍历深度（默认 1）"
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["dependency", "rag", "full"],
+                            "description": "模式：dependency(依赖图) / rag(语义搜索) / full(两者结合)"
+                        }
+                    }
+                }
+            ),
+            Tool(
+                name="search_interfaces",
+                description="语义搜索接口：基于向量相似度搜索代码实体。",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "搜索查询"
+                        },
+                        "entity_type": {
+                            "type": "string",
+                            "enum": ["class", "function", "method", "module"],
+                            "description": "实体类型过滤"
+                        },
+                        "domain": {
+                            "type": "string",
+                            "description": "领域过滤"
+                        },
+                        "limit": {
+                            "type": "number",
+                            "description": "返回数量限制（默认 10）"
+                        },
+                        "use_hybrid": {
+                            "type": "boolean",
+                            "description": "是否使用混合搜索（关键词+语义）"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            ),
+            Tool(
+                name="sync_rag",
+                description="同步 SQLite 数据到向量数据库，用于 RAG 检索。",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "force": {
+                            "type": "boolean",
+                            "description": "是否强制重新同步（清空后重建）"
                         }
                     }
                 }
@@ -1508,13 +1915,27 @@ def create_server(workspace_path: str) -> Server:
                 result = await ai_server.tool_verify(**arguments)
             elif name == "context":
                 result = await ai_server.tool_context(**arguments)
+            elif name == "extract_interfaces":
+                result = await ai_server.tool_extract_interfaces(**arguments)
+            elif name == "get_interface":
+                result = await ai_server.tool_get_interface(**arguments)
+            elif name == "list_interfaces":
+                result = await ai_server.tool_list_interfaces(**arguments)
+            elif name == "search_interfaces":
+                result = await ai_server.tool_search_interfaces(**arguments)
+            elif name == "sync_rag":
+                result = await ai_server.tool_sync_rag(**arguments)
             else:
                 result = {"error": f"Unknown tool: {name}"}
             
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
         
         except Exception as e:
-            return [TextContent(type="text", text=json.dumps({"error": str(e)}, ensure_ascii=False))]
+            import traceback
+            return [TextContent(type="text", text=json.dumps({
+                "error": str(e),
+                "traceback": traceback.format_exc()
+            }, ensure_ascii=False))]
     
     return server
 
