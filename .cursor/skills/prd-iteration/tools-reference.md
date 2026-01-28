@@ -2,7 +2,7 @@
 
 MCP Server: `user-ai-codegen`
 
-系统提供完整的代码分析、接口提取、RAG 检索、PRD 管理和任务追踪功能。
+系统提供完整的代码分析、接口提取、RAG 检索和任务追踪功能。
 
 ---
 
@@ -104,91 +104,13 @@ MCP Server: `user-ai-codegen`
 
 ---
 
-## prd - PRD 管理
-
-完整的 PRD 生命周期管理。
-
-### 创建
-
-```json
-{
-  "action": "create",
-  "prd_id": "feat_001",
-  "title": "新功能标题",
-  "content": "PRD 完整内容..."
-}
-```
-
-### 分析
-
-```json
-{
-  "action": "analyze",
-  "prd_id": "feat_001"
-}
-```
-
-**返回**:
-```json
-{
-  "prd_id": "feat_001",
-  "keywords": ["User", "login"],
-  "impacted_files": 3,
-  "change_points": [...]
-}
-```
-
-### 列表
-
-```json
-{"action": "list"}
-```
-
-**返回**:
-```json
-{
-  "prds": [
-    {"prd_id": "feat_001", "title": "...", "status": "planned"}
-  ],
-  "total": 1
-}
-```
-
-### 获取详情
-
-```json
-{"action": "get", "prd_id": "feat_001"}
-```
-
-### 更新状态
-
-```json
-{
-  "action": "update",
-  "prd_id": "feat_001",
-  "status": "in_progress"  // draft | analyzing | planned | in_progress | completed | archived
-}
-```
-
----
-
 ## task - 任务管理
 
-### 从 PRD 自动创建任务
-
-```json
-{
-  "action": "plan",
-  "prd_id": "feat_001"
-}
-```
-
-### 手动创建任务
+### 创建任务
 
 ```json
 {
   "action": "create",
-  "prd_id": "feat_001",
   "task_id": "task_001",
   "title": "任务标题",
   "description": "任务描述",
@@ -199,7 +121,7 @@ MCP Server: `user-ai-codegen`
 ### 列表
 
 ```json
-{"action": "list", "prd_id": "feat_001"}
+{"action": "list"}
 ```
 
 ### 获取详情
@@ -476,10 +398,10 @@ MCP Server: `user-ai-codegen`
 
 ## 常用组合
 
-### 快速开始新需求
+### 快速开始新功能
 
 ```
-index → extract_interfaces → sync_rag → prd.create → prd.analyze → task.plan → [context(mode="rag") → 编码 → verify → task.update]* → prd.update
+index → extract_interfaces → sync_rag → search_interfaces → task.create → [context(mode="rag") → 编码 → verify → task.update]*
 ```
 
 ### 理解代码
@@ -497,5 +419,5 @@ extract_interfaces → sync_rag → search_interfaces → get_interface → [基
 ### 断点续做
 
 ```
-prd.list → task.list → context → [继续]
+task.list → task.get → context → [继续]
 ```

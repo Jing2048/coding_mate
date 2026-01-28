@@ -1,4 +1,4 @@
-# PRD 迭代示例
+# 代码迭代示例
 
 ## 示例 1: 添加用户认证功能
 
@@ -24,127 +24,69 @@ user-ai-codegen.sync_rag({
   "force": false
 })
 // 返回: {"success": true, "stats": {...}}
-
-// 4. 创建 PRD
-user-ai-codegen.prd({
-  "action": "create",
-  "prd_id": "feat_auth",
-  "title": "用户认证系统",
-  "content": `
-# 用户认证系统
-
-## 背景
-系统需要添加用户认证功能，支持登录、注册、Token 验证。
-
-## 功能需求
-1. 用户注册 - 邮箱、密码、用户名
-2. 用户登录 - 返回 JWT Token
-3. Token 验证中间件
-4. 密码加密存储
-
-## 技术要求
-- 使用 JWT 进行身份验证
-- 密码使用 bcrypt 加密
-- Token 有效期 24 小时
-`
-})
 ```
 
-### Phase 2: 分析
+### Phase 2: 分析和规划
 
 ```json
-// 分析 PRD
-user-ai-codegen.prd({
-  "action": "analyze",
-  "prd_id": "feat_auth"
-})
-
-// 返回:
-{
-  "prd_id": "feat_auth",
-  "keywords": ["User", "Token", "JWT", "password", "login", "register"],
-  "impacted_files": 3,
-  "change_points": [
-    {
-      "file": "src/models/user.py",
-      "description": "修改 src/models/user.py",
-      "symbols": ["User", "UserCreate"]
-    },
-    {
-      "file": "src/services/auth.py",
-      "description": "修改 src/services/auth.py",
-      "symbols": ["AuthService"]
-    }
-  ]
-}
-
-// 查看相关文件
-user-ai-codegen.inspect({
-  "target": "src/models/user.py",
-  "include_source": true,
-  "include_deps": true
-})
-
-// 搜索现有的认证相关代码
-user-ai-codegen.search({
-  "query": "authenticate",
-  "type": "symbol"
-})
-
-// 语义搜索相关接口（推荐）
+// 1. 语义搜索相关接口
 user-ai-codegen.search_interfaces({
   "query": "用户认证服务",
   "limit": 10,
   "use_hybrid": true
 })
 
-// 查看相关接口详情
-user-ai-codegen.get_interface({
-  "interface_id": "services.auth:AuthService",
-  "include_contracts": true,
-  "include_dependencies": true
-})
-```
-
-### Phase 3: 规划
-
-```json
-// 自动创建任务
-user-ai-codegen.task({
-  "action": "plan",
-  "prd_id": "feat_auth"
-})
-
 // 返回:
 {
-  "prd_id": "feat_auth",
-  "tasks_created": 2,
-  "task_ids": ["feat_auth_task_1", "feat_auth_task_2"]
+  "total": 3,
+  "results": [
+    {
+      "id": "services.user:UserService",
+      "name": "UserService",
+      "type": "class",
+      "description": "用户服务类"
+    }
+  ],
+  "mode": "rag_hybrid"
 }
 
-// 查看任务列表
-user-ai-codegen.task({
-  "action": "list",
-  "prd_id": "feat_auth"
+// 2. 查看相关文件
+user-ai-codegen.inspect({
+  "target": "src/models/user.py",
+  "include_source": true,
+  "include_deps": true
 })
 
-// 手动添加额外任务
+// 3. 搜索现有的认证相关代码
+user-ai-codegen.search({
+  "query": "authenticate",
+  "type": "symbol"
+})
+
+// 4. 创建任务
 user-ai-codegen.task({
   "action": "create",
-  "prd_id": "feat_auth",
-  "task_id": "feat_auth_task_3",
-  "title": "添加密码加密工具",
-  "description": "使用 bcrypt 实现密码哈希和验证",
-  "files": ["src/utils/crypto.py"]
+  "task_id": "task_auth_001",
+  "title": "添加用户模型字段",
+  "description": "在 User 模型中添加 password_hash、email、created_at 字段",
+  "files": ["src/models/user.py"]
+})
+
+user-ai-codegen.task({
+  "action": "create",
+  "task_id": "task_auth_002",
+  "title": "实现认证服务",
+  "description": "创建 AuthService 类，实现登录、注册、Token 验证功能",
+  "files": ["src/services/auth.py"]
 })
 ```
 
-### Phase 4: 实现
+### Phase 3: 实现
 
 ```json
 // 获取第一个任务的上下文（使用 RAG 模式）
 user-ai-codegen.context({
-  "task_id": "feat_auth_task_1",
+  "task_id": "task_auth_001",
   "max_tokens": 4000,
   "mode": "rag",
   "format": "prompt"
@@ -153,18 +95,19 @@ user-ai-codegen.context({
 // 返回:
 {
   "task": {
-    "title": "修改 src/models/user.py",
-    "description": "添加用户模型字段",
+    "title": "添加用户模型字段",
+    "description": "在 User 模型中添加 password_hash、email、created_at 字段",
     "files": ["src/models/user.py"]
   },
-  "files": [
+  "target_files": [
     {
       "path": "src/models/user.py",
-      "symbols": ["User", "UserCreate"],
+      "symbols": [{"name": "User", "type": "class"}],
       "source": "class User:\n    id: int\n    name: str\n..."
     }
   ],
-  "dependencies": [...]
+  "dependencies": [...],
+  "related_code": [...]
 }
 
 // [Cursor/Claude 完成编码]
@@ -184,25 +127,18 @@ user-ai-codegen.verify({
 // 更新任务状态
 user-ai-codegen.task({
   "action": "update",
-  "task_id": "feat_auth_task_1",
+  "task_id": "task_auth_001",
   "status": "completed"
 })
 ```
 
-### Phase 5: 完成
+### Phase 4: 完成
 
 ```json
 // 最终验证
 user-ai-codegen.verify({
   "file": "src/services/auth.py",
   "checks": ["syntax", "type", "test"]
-})
-
-// 更新 PRD 状态
-user-ai-codegen.prd({
-  "action": "update",
-  "prd_id": "feat_auth",
-  "status": "completed"
 })
 
 // 重新索引更新知识图谱
@@ -219,42 +155,39 @@ user-ai-codegen.index({
 ### 快速流程
 
 ```json
-// 1. 创建 PRD
-user-ai-codegen.prd({
-  "action": "create",
-  "prd_id": "fix_perf_001",
-  "title": "优化数据库查询性能",
-  "content": "DataService.get_all() 方法在数据量大时响应缓慢，需要添加分页支持"
-})
+// 1. 索引代码库
+user-ai-codegen.index({"paths": ["src"]})
 
-// 2. 分析
-user-ai-codegen.prd({"action": "analyze", "prd_id": "fix_perf_001"})
+// 2. 提取接口
+user-ai-codegen.extract_interfaces({"paths": ["src"]})
 
-// 3. 搜索相关代码
+// 3. 同步 RAG
+user-ai-codegen.sync_rag()
+
+// 4. 搜索相关代码
 user-ai-codegen.search({"query": "DataService", "type": "symbol"})
 user-ai-codegen.search({"query": "get_all", "type": "content"})
 
-// 4. 查看详情
+// 5. 查看详情
 user-ai-codegen.inspect({
   "target": "src/services/data.py:DataService",
   "include_source": true
 })
 
-// 5. 创建任务并实现
+// 6. 创建任务并实现
 user-ai-codegen.task({
   "action": "create",
-  "prd_id": "fix_perf_001",
-  "task_id": "fix_perf_001_task_1",
+  "task_id": "task_perf_001",
   "title": "添加分页参数",
   "files": ["src/services/data.py"]
 })
 
-// 6. 获取上下文 → 编码 → 验证 → 完成
+// 7. 获取上下文 → 编码 → 验证 → 完成
 ```
 
 ---
 
-## 示例 3: 代码理解（无 PRD）
+## 示例 3: 代码理解（无任务）
 
 当只需要理解代码而不进行修改时:
 
@@ -308,32 +241,55 @@ user-ai-codegen.list_interfaces({
 ## 示例 4: 断点续做
 
 ```json
-// 1. 查看所有 PRD
-user-ai-codegen.prd({"action": "list"})
-// 返回:
-{
-  "prds": [
-    {"prd_id": "feat_auth", "title": "用户认证", "status": "in_progress"},
-    {"prd_id": "fix_bug_001", "title": "修复登录问题", "status": "completed"}
-  ]
-}
-
-// 2. 获取进行中的 PRD 详情
-user-ai-codegen.prd({"action": "get", "prd_id": "feat_auth"})
-
-// 3. 查看任务状态
-user-ai-codegen.task({"action": "list", "prd_id": "feat_auth"})
+// 1. 查看所有任务
+user-ai-codegen.task({"action": "list"})
 // 返回:
 {
   "tasks": [
-    {"task_id": "feat_auth_task_1", "status": "completed"},
-    {"task_id": "feat_auth_task_2", "status": "pending"},
-    {"task_id": "feat_auth_task_3", "status": "pending"}
+    {"task_id": "task_auth_001", "title": "添加用户模型", "status": "completed"},
+    {"task_id": "task_auth_002", "title": "实现认证服务", "status": "pending"},
+    {"task_id": "task_auth_003", "title": "添加 Token 验证", "status": "pending"}
   ]
 }
 
-// 4. 继续第一个未完成的任务
-user-ai-codegen.context({"task_id": "feat_auth_task_2"})
+// 2. 获取任务详情
+user-ai-codegen.task({"action": "get", "task_id": "task_auth_002"})
+
+// 3. 继续第一个未完成的任务
+user-ai-codegen.context({
+  "task_id": "task_auth_002",
+  "mode": "rag"
+})
 
 // [继续编码...]
+```
+
+---
+
+## 示例 5: 接口驱动开发
+
+```json
+// 1. 提取接口
+user-ai-codegen.extract_interfaces({
+  "paths": ["src/services"]
+})
+
+// 2. 同步到 RAG
+user-ai-codegen.sync_rag()
+
+// 3. 语义搜索相关接口
+user-ai-codegen.search_interfaces({
+  "query": "用户服务接口",
+  "limit": 5
+})
+
+// 4. 查看接口详情（包含契约和依赖）
+user-ai-codegen.get_interface({
+  "interface_id": "services.user:UserService",
+  "include_contracts": true,
+  "include_dependencies": true
+})
+
+// 5. 基于接口契约实现代码
+// [使用接口定义、契约、依赖关系等信息进行编码]
 ```
