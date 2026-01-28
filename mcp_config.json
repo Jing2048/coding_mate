@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ai-codegen": {
+      "command": "/Users/jing/LLM/.venv/bin/python",
+      "args": ["-m", "ai_codegen.mcp_server.server", "--workspace", "/Users/jing/LLM"],
+      "env": {
+        "PYTHONPATH": "/Users/jing/LLM"
+      }
+    }
+  }
+}

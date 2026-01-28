@@ -1,0 +1,18 @@
+# AI CodeGen - Dependencies
+
+# MCP Server
+mcp>=1.0.0
+
+# Code Parsing (Tree-sitter)
+tree-sitter>=0.21.0
+tree-sitter-python>=0.21.0
+tree-sitter-javascript>=0.21.0
+tree-sitter-typescript>=0.21.0
+tree-sitter-swift>=0.0.1
+tree-sitter-go>=0.21.0
+
+# Type Checking (for verify tool)
+mypy>=1.8.0
+
+# Testing (for verify tool)
+pytest>=8.0.0
