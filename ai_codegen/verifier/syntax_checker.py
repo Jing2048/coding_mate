@@ -89,6 +89,10 @@ class SyntaxChecker:
             # 基本的括号匹配检查
             issues.extend(self._check_bracket_matching(file_path, content))
         
+        elif language == "swift":
+            # Swift 基本的括号匹配检查
+            issues.extend(self._check_bracket_matching(file_path, content))
+        
         return issues
     
     def _check_bracket_matching(

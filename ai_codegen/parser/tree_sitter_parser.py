@@ -18,6 +18,7 @@ SUPPORTED_LANGUAGES = {
     ".ts": "typescript",
     ".tsx": "tsx",
     ".jsx": "javascript",
+    ".swift": "swift",
     ".go": "go",
     ".rs": "rust",
     ".java": "java",
@@ -168,6 +169,16 @@ class TreeSitterParser:
                     self._parsers["tsx"] = parser
             except (ImportError, AttributeError) as e:
                 print(f"TypeScript parser not available: {e}")
+            
+            # 尝试初始化 Swift 解析器
+            try:
+                import tree_sitter_swift
+                if "swift" in self._languages:
+                    parser = Parser()
+                    parser.language = Language(tree_sitter_swift.language())
+                    self._parsers["swift"] = parser
+            except (ImportError, AttributeError) as e:
+                print(f"Swift parser not available: {e}")
                     
             self._initialized = True
         except ImportError as e:
@@ -325,6 +336,58 @@ class TreeSitterParser:
                     exp = self._extract_js_export(node, source_bytes)
                     if exp:
                         exports.extend(exp)
+            
+            # Swift 特定处理
+            elif language == "swift":
+                if node_type == "class_declaration":
+                    symbol = self._extract_swift_class(node, file_path, source_bytes)
+                    if symbol:
+                        symbols.append(symbol)
+                        for child in node.children:
+                            traverse(child, symbol.name)
+                    return
+                    
+                elif node_type == "struct_declaration":
+                    symbol = self._extract_swift_struct(node, file_path, source_bytes)
+                    if symbol:
+                        symbols.append(symbol)
+                        for child in node.children:
+                            traverse(child, symbol.name)
+                    return
+                    
+                elif node_type == "protocol_declaration":
+                    symbol = self._extract_swift_protocol(node, file_path, source_bytes)
+                    if symbol:
+                        symbols.append(symbol)
+                        for child in node.children:
+                            traverse(child, symbol.name)
+                    return
+                    
+                elif node_type == "enum_declaration":
+                    symbol = self._extract_swift_enum(node, file_path, source_bytes)
+                    if symbol:
+                        symbols.append(symbol)
+                        for child in node.children:
+                            traverse(child, symbol.name)
+                    return
+                    
+                elif node_type == "extension_declaration":
+                    symbol = self._extract_swift_extension(node, file_path, source_bytes)
+                    if symbol:
+                        symbols.append(symbol)
+                        for child in node.children:
+                            traverse(child, symbol.name)
+                    return
+                    
+                elif node_type == "function_declaration":
+                    symbol = self._extract_swift_function(node, file_path, source_bytes, parent_name)
+                    if symbol:
+                        symbols.append(symbol)
+                        
+                elif node_type == "import_declaration":
+                    imp = self._extract_swift_import(node, source_bytes)
+                    if imp:
+                        imports.append(imp)
             
             # 递归遍历子节点
             for child in node.children:
@@ -612,6 +675,238 @@ class TreeSitterParser:
             exports.append(text)
         
         return exports
+    
+    def _extract_swift_class(
+        self,
+        node,
+        file_path: str,
+        source_bytes: bytes
+    ) -> Optional[CodeSymbol]:
+        """提取 Swift 类信息"""
+        name = None
+        for child in node.children:
+            if child.type == "type_identifier":
+                name = source_bytes[child.start_byte:child.end_byte].decode("utf-8")
+                break
+        
+        if not name:
+            return None
+        
+        # 提取类签名（包含继承和协议）
+        full_text = source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+        brace_pos = full_text.find("{")
+        if brace_pos > 0:
+            signature = full_text[:brace_pos].strip()
+        else:
+            signature = f"class {name}"
+        
+        return CodeSymbol(
+            name=name,
+            node_type=NodeType.CLASS,
+            location=CodeLocation(
+                file_path=file_path,
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                start_column=node.start_point[1],
+                end_column=node.end_point[1],
+            ),
+            signature=signature,
+        )
+    
+    def _extract_swift_struct(
+        self,
+        node,
+        file_path: str,
+        source_bytes: bytes
+    ) -> Optional[CodeSymbol]:
+        """提取 Swift 结构体信息"""
+        name = None
+        for child in node.children:
+            if child.type == "type_identifier":
+                name = source_bytes[child.start_byte:child.end_byte].decode("utf-8")
+                break
+        
+        if not name:
+            return None
+        
+        full_text = source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+        brace_pos = full_text.find("{")
+        if brace_pos > 0:
+            signature = full_text[:brace_pos].strip()
+        else:
+            signature = f"struct {name}"
+        
+        return CodeSymbol(
+            name=name,
+            node_type=NodeType.CLASS,  # 结构体也视为类类型
+            location=CodeLocation(
+                file_path=file_path,
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                start_column=node.start_point[1],
+                end_column=node.end_point[1],
+            ),
+            signature=signature,
+        )
+    
+    def _extract_swift_protocol(
+        self,
+        node,
+        file_path: str,
+        source_bytes: bytes
+    ) -> Optional[CodeSymbol]:
+        """提取 Swift 协议信息"""
+        name = None
+        for child in node.children:
+            if child.type == "type_identifier":
+                name = source_bytes[child.start_byte:child.end_byte].decode("utf-8")
+                break
+        
+        if not name:
+            return None
+        
+        full_text = source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+        brace_pos = full_text.find("{")
+        if brace_pos > 0:
+            signature = full_text[:brace_pos].strip()
+        else:
+            signature = f"protocol {name}"
+        
+        return CodeSymbol(
+            name=name,
+            node_type=NodeType.INTERFACE,  # 协议视为接口类型
+            location=CodeLocation(
+                file_path=file_path,
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                start_column=node.start_point[1],
+                end_column=node.end_point[1],
+            ),
+            signature=signature,
+        )
+    
+    def _extract_swift_enum(
+        self,
+        node,
+        file_path: str,
+        source_bytes: bytes
+    ) -> Optional[CodeSymbol]:
+        """提取 Swift 枚举信息"""
+        name = None
+        for child in node.children:
+            if child.type == "type_identifier":
+                name = source_bytes[child.start_byte:child.end_byte].decode("utf-8")
+                break
+        
+        if not name:
+            return None
+        
+        full_text = source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+        brace_pos = full_text.find("{")
+        if brace_pos > 0:
+            signature = full_text[:brace_pos].strip()
+        else:
+            signature = f"enum {name}"
+        
+        return CodeSymbol(
+            name=name,
+            node_type=NodeType.TYPE,  # 枚举视为类型
+            location=CodeLocation(
+                file_path=file_path,
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                start_column=node.start_point[1],
+                end_column=node.end_point[1],
+            ),
+            signature=signature,
+        )
+    
+    def _extract_swift_extension(
+        self,
+        node,
+        file_path: str,
+        source_bytes: bytes
+    ) -> Optional[CodeSymbol]:
+        """提取 Swift 扩展信息"""
+        name = None
+        for child in node.children:
+            if child.type == "type_identifier":
+                name = source_bytes[child.start_byte:child.end_byte].decode("utf-8")
+                break
+        
+        if not name:
+            return None
+        
+        full_text = source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+        brace_pos = full_text.find("{")
+        if brace_pos > 0:
+            signature = full_text[:brace_pos].strip()
+        else:
+            signature = f"extension {name}"
+        
+        return CodeSymbol(
+            name=f"{name}_extension",
+            node_type=NodeType.CLASS,  # 扩展视为类类型
+            location=CodeLocation(
+                file_path=file_path,
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                start_column=node.start_point[1],
+                end_column=node.end_point[1],
+            ),
+            signature=signature,
+        )
+    
+    def _extract_swift_function(
+        self,
+        node,
+        file_path: str,
+        source_bytes: bytes,
+        parent_name: Optional[str]
+    ) -> Optional[CodeSymbol]:
+        """提取 Swift 函数/方法信息"""
+        name = None
+        for child in node.children:
+            if child.type == "simple_identifier":
+                name = source_bytes[child.start_byte:child.end_byte].decode("utf-8")
+                break
+        
+        if not name:
+            return None
+        
+        # 提取函数签名
+        full_text = source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+        brace_pos = full_text.find("{")
+        if brace_pos > 0:
+            signature = full_text[:brace_pos].strip()
+        else:
+            signature = f"func {name}"
+        
+        return CodeSymbol(
+            name=name,
+            node_type=NodeType.METHOD if parent_name else NodeType.FUNCTION,
+            location=CodeLocation(
+                file_path=file_path,
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                start_column=node.start_point[1],
+                end_column=node.end_point[1],
+            ),
+            signature=signature,
+            parent=parent_name,
+        )
+    
+    def _extract_swift_import(self, node, source_bytes: bytes) -> Dict[str, Any]:
+        """提取 Swift import 语句"""
+        text = source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+        # Swift import 格式: import ModuleName 或 import ModuleName.Submodule
+        module = text.replace("import", "").strip()
+        return {
+            "type": "import",
+            "module": module,
+            "names": [module.split(".")[0]],
+            "raw": text,
+        }
     
     def _parse_with_fallback(
         self,

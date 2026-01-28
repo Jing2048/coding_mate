@@ -173,7 +173,7 @@ class AICodeGenServer:
                     content = file_path.read_text(encoding='utf-8')
                     # 获取语言
                     ext = file_path.suffix
-                    lang_map = {'.py': 'python', '.js': 'javascript', '.ts': 'typescript'}
+                    lang_map = {'.py': 'python', '.js': 'javascript', '.ts': 'typescript', '.swift': 'swift'}
                     language = lang_map.get(ext, 'python')
                     result = self.parser.parse_source(content, str(file_path), language)
                     
@@ -1240,7 +1240,7 @@ Target files: {', '.join(task.get('files', []))}
                 try:
                     source_code = full_path.read_text(encoding='utf-8')
                     ext = full_path.suffix
-                    lang_map = {'.py': 'python', '.js': 'javascript', '.ts': 'typescript', '.go': 'go'}
+                    lang_map = {'.py': 'python', '.js': 'javascript', '.ts': 'typescript', '.swift': 'swift', '.go': 'go'}
                     language = lang_map.get(ext, 'python')
                     
                     relationships = extractor.extract_relationships(source_code, file_path, language)

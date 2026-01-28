@@ -30,6 +30,7 @@ class TypeChecker:
             "mypy": ["mypy", "--version"],
             "tsc": ["tsc", "--version"],
             "pyright": ["pyright", "--version"],
+            "swiftc": ["swiftc", "--version"],
         }
         
         for tool, cmd in tools.items():
@@ -65,6 +66,8 @@ class TypeChecker:
             return await self._check_python(file_path, content)
         elif language in ("typescript", "javascript"):
             return await self._check_typescript(file_path, content)
+        elif language == "swift":
+            return await self._check_swift(file_path, content)
         else:
             return VerificationResult(
                 passed=True,
@@ -243,5 +246,125 @@ class TypeChecker:
             pass
         finally:
             os.unlink(temp_path)
+        
+        return issues
+    
+    async def _check_swift(
+        self,
+        file_path: str,
+        content: str
+    ) -> VerificationResult:
+        """检查 Swift 类型"""
+        issues = []
+        
+        if self._available_tools.get("swiftc"):
+            issues = await self._run_swiftc(file_path, content)
+        else:
+            # 基本的 Swift 类型检查（检查常见错误）
+            issues = self._basic_swift_type_check(content, file_path)
+        
+        return VerificationResult(
+            passed=len([i for i in issues if i.severity == Severity.ERROR]) == 0,
+            level=VerificationLevel.L1_TYPE,
+            issues=issues,
+        )
+    
+    async def _run_swiftc(
+        self,
+        file_path: str,
+        content: str
+    ) -> List[VerificationIssue]:
+        """运行 Swift 编译器进行类型检查"""
+        issues = []
+        
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".swift",
+            delete=False
+        ) as f:
+            f.write(content)
+            temp_path = f.name
+        
+        try:
+            # swiftc -typecheck 只进行类型检查，不生成代码
+            result = subprocess.run(
+                ["swiftc", "-typecheck", temp_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            # 解析 swiftc 输出
+            for line in result.stderr.split("\n"):
+                if not line.strip():
+                    continue
+                
+                # Swift 错误格式: file.swift:line:column: error: message
+                if "error:" in line or "warning:" in line:
+                    parts = line.split(":", 4)
+                    if len(parts) >= 5:
+                        try:
+                            line_num = int(parts[1]) if parts[1].strip().isdigit() else None
+                            col_num = int(parts[2]) if parts[2].strip().isdigit() else None
+                            level = parts[3].strip()
+                            message = parts[4].strip()
+                            
+                            severity = Severity.ERROR if "error" in level else Severity.WARNING
+                            
+                            issues.append(VerificationIssue(
+                                level=VerificationLevel.L1_TYPE,
+                                severity=severity,
+                                message=message,
+                                file_path=file_path,
+                                line=line_num,
+                                column=col_num,
+                                rule="swiftc",
+                            ))
+                        except (ValueError, IndexError):
+                            # 如果解析失败，仍然添加问题
+                            issues.append(VerificationIssue(
+                                level=VerificationLevel.L1_TYPE,
+                                severity=Severity.WARNING,
+                                message=line.strip(),
+                                file_path=file_path,
+                                rule="swiftc",
+                            ))
+        
+        except subprocess.TimeoutExpired:
+            issues.append(VerificationIssue(
+                level=VerificationLevel.L1_TYPE,
+                severity=Severity.WARNING,
+                message="Swift type checking timed out",
+                file_path=file_path,
+            ))
+        finally:
+            os.unlink(temp_path)
+        
+        return issues
+    
+    def _basic_swift_type_check(
+        self,
+        content: str,
+        file_path: str
+    ) -> List[VerificationIssue]:
+        """基本的 Swift 类型检查"""
+        issues = []
+        lines = content.split("\n")
+        
+        for i, line in enumerate(lines, 1):
+            # 检查函数定义是否有返回类型
+            if "func " in line and "->" not in line and "{" in line:
+                # 函数没有显式返回类型（可能是 Void）
+                # 检查是否是 Void 返回
+                if not line.strip().endswith("{"):
+                    issues.append(VerificationIssue(
+                        level=VerificationLevel.L1_TYPE,
+                        severity=Severity.INFO,
+                        message="Function missing explicit return type",
+                        file_path=file_path,
+                        line=i,
+                        suggestion="Add return type annotation: func name() -> ReturnType",
+                    ))
         
         return issues

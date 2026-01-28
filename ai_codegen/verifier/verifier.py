@@ -128,6 +128,11 @@ class VerificationConfig:
                 "type_tool": "tsc",
                 "test_framework": "jest",
             },
+            "swift": {
+                "syntax_tool": "tree-sitter",
+                "type_tool": "swiftc",
+                "test_framework": "xctest",
+            },
         }
 
 
@@ -286,6 +291,7 @@ class Verifier:
             ".ts": "typescript",
             ".tsx": "typescript",
             ".jsx": "javascript",
+            ".swift": "swift",
             ".go": "go",
             ".rs": "rust",
             ".java": "java",
