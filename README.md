@@ -1,40 +1,50 @@
-# AI CodeGen
+# AI CodeGen MCP Server
 
-一个基于 MCP (Model Context Protocol) 的代码工程辅助系统。
+一个基于 MCP (Model Context Protocol) 的高可靠性 AI 编码系统，专注于**更好的编码**而非仅仅完成需求。
 
-**核心理念**：MCP 提供代码分析、PRD 管理和验证能力，**编码工作交给 Cursor/Claude**。
+**版本**: V2.0 (Phase 2 完成)
 
-## 架构
+---
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Cursor / Claude                       │
-│                    (负责编码工作)                         │
-└─────────────────────────────────────────────────────────┘
-                           │
-                           │ MCP Protocol
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│                  AI CodeGen MCP Server                   │
-│  ┌─────────────────────────────────────────────────────┐│
-│  │ Tools:                                              ││
-│  │  • index    - 索引代码库                             ││
-│  │  • search   - 搜索代码                               ││
-│  │  • inspect  - 查看符号/文件详情                      ││
-│  │  • prd      - PRD 生命周期管理                       ││
-│  │  • task     - 任务管理                               ││
-│  │  • verify   - 代码验证                               ││
-│  │  • context  - 获取实现上下文                          ││
-│  └─────────────────────────────────────────────────────┘│
-│                           │                              │
-│     ┌─────────────────────┴─────────────────────┐       │
-│     │           SQLite 持久化存储                │       │
-│     │  • 解析结果  • 知识图谱  • PRD  • 任务     │       │
-│     └───────────────────────────────────────────┘       │
-└─────────────────────────────────────────────────────────┘
-```
+## 🎯 核心理念
 
-## 安装
+### 从"完成需求"到"更好的编码"
+
+**V1**: 关注功能实现，PRD → 任务 → 编码 → 验证
+
+**V2**: 关注代码质量，接口驱动开发，依赖感知编码，架构级别建议
+
+---
+
+## 🏗️ 核心能力
+
+### 1. 接口自动提取 (Phase 1 ✅)
+
+- 从代码自动提取接口定义
+- 识别方法签名、类型信息、契约
+- 检测模块边界和依赖关系
+
+### 2. RAG 增强检索 (Phase 2 ✅)
+
+- 向量化存储代码实体
+- 语义搜索接口和依赖
+- 智能上下文检索
+
+### 3. 依赖感知编码
+
+- 理解代码调用关系
+- 分析改动影响范围
+- 保持接口契约一致性
+
+### 4. 专业编码辅助
+
+- 基于接口规范生成代码
+- 架构级别建议
+- 关注代码质量、可维护性
+
+---
+
+## 📦 安装
 
 ```bash
 # 创建虚拟环境
@@ -43,9 +53,16 @@ source .venv/bin/activate
 
 # 安装依赖
 pip install -r requirements.txt
+
+# 安装 Phase 2 RAG 依赖（可选，用于语义搜索）
+./install_phase2_deps.sh
 ```
 
-## MCP 配置
+---
+
+## 🚀 快速开始
+
+### 1. MCP 配置
 
 在 Cursor 的 MCP 配置中添加：
 
@@ -63,160 +80,153 @@ pip install -r requirements.txt
 }
 ```
 
-## MCP 工具
+### 2. 基本使用
 
-### index - 索引代码库
+```python
+from ai_codegen.mcp_server.server import AICodeGenServer
+import asyncio
 
-构建代码知识图谱，支持增量索引。
+server = AICodeGenServer("/path/to/workspace")
 
-```json
-{
-  "paths": ["src"],
-  "extensions": [".py"],
-  "force": false
-}
+# 提取接口
+await server.tool_extract_interfaces(paths=["src/"])
+
+# 同步到向量数据库（需要 RAG 依赖）
+await server.tool_sync_rag(force=True)
+
+# 语义搜索
+results = await server.tool_search_interfaces(
+    query="用户认证服务",
+    use_hybrid=True
+)
+
+# 获取上下文
+context = await server.tool_context(
+    mode="rag",
+    max_tokens=4000
+)
 ```
 
-### search - 搜索代码
+---
 
-支持符号、文件、内容、依赖搜索。
+## 📚 文档
 
-```json
-{
-  "query": "UserService",
-  "type": "symbol",
-  "limit": 20
-}
+### 核心文档
+
+- **[设计哲学](docs/design/DESIGN_PHILOSOPHY.md)** - V2 设计理念和原则
+- **[数据模型](docs/design/DATA_MODEL.md)** - CodeEntity 统一数据模型
+- **[架构概览](docs/design/ARCHITECTURE.md)** - 系统架构设计
+
+### 实施文档
+
+- **[Phase 1 实施](docs/implementation/PHASE1.md)** - 接口自动提取
+- **[Phase 2 实施](docs/implementation/PHASE2.md)** - RAG 系统构建
+- **[V2 路线图](docs/implementation/V2_ROADMAP.md)** - 完整迭代计划
+
+### API 文档
+
+- **[MCP 工具参考](docs/api/MCP_TOOLS.md)** - 所有 MCP 工具说明
+- **[RAG API](docs/api/RAG_API.md)** - RAG 系统 API
+
+### 使用示例
+
+- **[基础示例](docs/examples/BASIC_USAGE.md)** - 基本使用场景
+- **[完整工作流](docs/examples/WORKFLOW.md)** - 端到端工作流
+
+---
+
+## 🔧 MCP 工具
+
+### V2 新工具
+
+| 工具 | 功能 | 状态 |
+|------|------|------|
+| `extract_interfaces` | 从代码提取接口定义 | ✅ |
+| `get_interface` | 获取接口详情 | ✅ |
+| `list_interfaces` | 列出所有接口 | ✅ |
+| `search_interfaces` | 语义搜索接口 | ✅ |
+| `sync_rag` | 同步数据到向量数据库 | ✅ |
+
+### V1 工具（保留）
+
+| 工具 | 功能 | 状态 |
+|------|------|------|
+| `index` | 索引代码库 | ✅ |
+| `search` | 搜索代码 | ✅ |
+| `inspect` | 查看详情 | ✅ |
+| `prd` | PRD 管理 | ✅ |
+| `task` | 任务管理 | ✅ |
+| `verify` | 代码验证 | ✅ |
+| `context` | 获取上下文（已增强） | ✅ |
+
+详细文档: [MCP 工具参考](docs/api/MCP_TOOLS.md)
+
+---
+
+## 🧪 测试
+
+```bash
+# 基础功能测试（不依赖 RAG）
+python test_phase2_without_deps.py
+
+# 完整功能测试（需要 RAG 依赖）
+python test_phase2_complete.py
 ```
 
-### inspect - 查看详情
+---
 
-获取文件或符号的详细信息，包括源码和依赖。
-
-```json
-{
-  "target": "src/services/user.py:UserService",
-  "include_source": true,
-  "include_deps": true
-}
-```
-
-### prd - PRD 管理
-
-管理需求文档的完整生命周期。
-
-```json
-// 创建 PRD
-{"action": "create", "prd_id": "feat_001", "title": "用户认证", "content": "..."}
-
-// 分析 PRD，识别影响的代码
-{"action": "analyze", "prd_id": "feat_001"}
-
-// 列出所有 PRD
-{"action": "list"}
-
-// 获取 PRD 详情
-{"action": "get", "prd_id": "feat_001"}
-
-// 更新状态
-{"action": "update", "prd_id": "feat_001", "status": "in_progress"}
-```
-
-### task - 任务管理
-
-从 PRD 创建和管理实现任务。
-
-```json
-// 从 PRD 自动创建任务
-{"action": "plan", "prd_id": "feat_001"}
-
-// 列出任务
-{"action": "list", "prd_id": "feat_001"}
-
-// 更新任务状态
-{"action": "update", "task_id": "task_001", "status": "completed"}
-```
-
-### verify - 代码验证
-
-验证代码的语法、类型和测试。
-
-```json
-{
-  "file": "src/services/user.py",
-  "checks": ["syntax", "type", "test"]
-}
-```
-
-### context - 获取上下文
-
-获取实现任务所需的上下文，可直接用于 prompt。
-
-```json
-{
-  "task_id": "task_001",
-  "files": ["src/models/user.py"],
-  "max_tokens": 4000
-}
-```
-
-## 典型工作流
-
-### 1. 新需求开发
-
-```
-1. 索引代码库
-   index(paths=["src"])
-
-2. 创建 PRD
-   prd(action="create", prd_id="feat_auth", content="实现用户认证...")
-
-3. 分析 PRD，找出影响的代码
-   prd(action="analyze", prd_id="feat_auth")
-
-4. 自动创建任务
-   task(action="plan", prd_id="feat_auth")
-
-5. 获取任务上下文
-   context(task_id="feat_auth_task_1")
-
-6. [Cursor/Claude 完成编码]
-
-7. 验证代码
-   verify(file="src/auth/service.py", checks=["syntax", "type"])
-
-8. 更新任务状态
-   task(action="update", task_id="feat_auth_task_1", status="completed")
-```
-
-### 2. 代码理解
-
-```
-1. 搜索符号
-   search(query="authenticate", type="symbol")
-
-2. 查看详情
-   inspect(target="src/auth/service.py:authenticate")
-
-3. 查看依赖
-   search(query="AuthService", type="dependency")
-```
-
-## 项目结构
+## 📊 项目结构
 
 ```
 ai_codegen/
-├── mcp_server/         # MCP 服务器
-│   ├── server.py       # 服务实现
-│   └── persistence.py  # 持久化存储
-├── parser/             # 代码解析
+├── models/              # 数据模型
+│   └── code_entity.py   # CodeEntity 统一模型
+├── extractor/           # 接口提取器
+│   ├── interface_extractor.py
+│   ├── contract_inferencer.py
+│   └── boundary_detector.py
+├── rag/                 # RAG 系统
+│   ├── vector_store.py
+│   ├── embedder.py
+│   ├── semantic_searcher.py
+│   ├── context_retriever.py
+│   └── rag_manager.py
+├── parser/              # 代码解析
 │   ├── tree_sitter_parser.py
-│   └── dependency_extractor.py
-├── graph/              # 知识图谱
-├── verifier/           # 代码验证
-└── visualization/      # 可视化
+│   └── relationship_extractor.py
+├── mcp_server/          # MCP 服务器
+│   ├── server.py
+│   └── persistence_v2.py
+└── verifier/            # 代码验证
 ```
 
-## License
+---
+
+## 🗺️ 版本历史
+
+### V2.0 (当前)
+
+- ✅ Phase 1: 接口自动提取
+- ✅ Phase 2: RAG 系统构建
+- ⏳ Phase 3: 专业编码辅助（规划中）
+- ⏳ Phase 4: 集成和优化（规划中）
+
+### V1.0
+
+- 基础代码分析
+- PRD 和任务管理
+- 代码验证
+
+---
+
+## 📄 License
 
 MIT
+
+---
+
+## 🔗 相关文档
+
+- [设计哲学](docs/design/DESIGN_PHILOSOPHY.md)
+- [V2 路线图](docs/implementation/V2_ROADMAP.md)
+- [测试报告](docs/implementation/PHASE2_TEST_REPORT.md)

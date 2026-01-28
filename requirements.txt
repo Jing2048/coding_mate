@@ -11,6 +11,10 @@ tree-sitter-typescript>=0.21.0
 tree-sitter-swift>=0.0.1
 tree-sitter-go>=0.21.0
 
+# RAG System (Phase 2)
+chromadb>=0.4.22
+sentence-transformers>=2.2.0
+
 # Type Checking (for verify tool)
 mypy>=1.8.0
 

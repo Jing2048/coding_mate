@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI CodeGen 知识图谱</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        :root {
+            --glass-bg: rgba(255, 255, 255, 0.25);
+            --glass-border: rgba(255, 255, 255, 0.4);
+            --glass-shadow: rgba(0, 0, 0, 0.1);
+            --text-primary: rgba(0, 0, 0, 0.85);
+            --text-secondary: rgba(0, 0, 0, 0.55);
+            --accent: rgba(0, 122, 255, 0.9);
+            --accent-light: rgba(0, 122, 255, 0.15);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #e0e5ec 0%, #f5f7fa 50%, #e8edf5 100%);
+            background-attachment: fixed;
+            padding: 40px 20px;
+            -webkit-font-smoothing: antialiased;
+        }
+        
+        /* 动态背景光晕 */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: 
+                radial-gradient(circle at 20% 20%, rgba(120, 200, 255, 0.3) 0%, transparent 40%),
+                radial-gradient(circle at 80% 80%, rgba(200, 150, 255, 0.25) 0%, transparent 40%),
+                radial-gradient(circle at 50% 50%, rgba(255, 180, 200, 0.2) 0%, transparent 50%);
+            animation: aurora 20s ease-in-out infinite;
+            z-index: -1;
+        }
+        
+        @keyframes aurora {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            33% { transform: translate(2%, 2%) rotate(1deg); }
+            66% { transform: translate(-1%, 1%) rotate(-1deg); }
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        /* 标题 */
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            letter-spacing: -0.5px;
+        }
+        
+        .subtitle {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            font-weight: 400;
+        }
+        
+        /* Glass Card */
+        .glass {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            box-shadow: 
+                0 8px 32px var(--glass-shadow),
+                inset 0 1px 0 rgba(255, 255, 255, 0.6);
+        }
+        
+        /* 统计卡片网格 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+        
+        @media (max-width: 900px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        
+        @media (max-width: 500px) {
+            .stats-grid { grid-template-columns: 1fr; }
+        }
+        
+        .stat-card {
+            padding: 24px;
+            text-align: center;
+            transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            cursor: default;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-4px) scale(1.02);
+            box-shadow: 
+                0 16px 48px rgba(0, 0, 0, 0.15),
+                inset 0 1px 0 rgba(255, 255, 255, 0.8);
+        }
+        
+        .stat-icon {
+            font-size: 1.5rem;
+            margin-bottom: 8px;
+            opacity: 0.9;
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            line-height: 1.1;
+        }
+        
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 6px;
+            font-weight: 500;
+        }
+        
+        /* 主内容区 */
+        .main-section {
+            padding: 28px;
+            margin-bottom: 24px;
+        }
+        
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        
+        .section-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        /* Tab 切换 - Pill 风格 */
+        .tabs {
+            display: inline-flex;
+            background: rgba(0, 0, 0, 0.06);
+            border-radius: 10px;
+            padding: 3px;
+        }
+        
+        .tab {
+            padding: 8px 18px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+        
+        .tab:hover {
+            color: var(--text-primary);
+        }
+        
+        .tab.active {
+            background: white;
+            color: var(--text-primary);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* 图表容器 */
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+            overflow-x: auto;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.5);
+        }
+        
+        .mermaid svg {
+            max-width: 100%;
+        }
+        
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 24px;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+        }
+        
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        
+        /* Mermaid 主题覆盖 */
+        .mermaid .node rect,
+        .mermaid .node polygon {
+            fill: rgba(255, 255, 255, 0.8) !important;
+            stroke: rgba(0, 0, 0, 0.15) !important;
+            stroke-width: 1px !important;
+            rx: 8px !important;
+        }
+        
+        .mermaid .cluster rect {
+            fill: rgba(0, 122, 255, 0.08) !important;
+            stroke: rgba(0, 122, 255, 0.2) !important;
+            rx: 12px !important;
+        }
+        
+        .mermaid .nodeLabel {
+            color: var(--text-primary) !important;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif !important;
+            font-size: 12px !important;
+        }
+        
+        .mermaid .cluster-label .nodeLabel {
+            color: var(--accent) !important;
+            font-weight: 600 !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>AI CodeGen 知识图谱</h1>
+            <p class="subtitle">AI CodeGen 知识图谱可视化</p>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card glass">
+                <div class="stat-icon">📁</div>
+                <div class="stat-value">4</div>
+                <div class="stat-label">已分析文件</div>
+            </div>
+            <div class="stat-card glass">
+                <div class="stat-icon">◆</div>
+                <div class="stat-value">81</div>
+                <div class="stat-label">代码符号</div>
+            </div>
+            <div class="stat-card glass">
+                <div class="stat-icon">▤</div>
+                <div class="stat-value">0</div>
+                <div class="stat-label">PRD 分析</div>
+            </div>
+            <div class="stat-card glass">
+                <div class="stat-icon">📋</div>
+                <div class="stat-value">0</div>
+                <div class="stat-label">开发任务</div>
+            </div>
+        </div>
+
+        <div class="main-section glass">
+            <div class="section-header">
+                <span class="section-title">模块结构</span>
+                <div class="tabs">
+                    <button class="tab active" onclick="showTab('modules', this)">依赖图</button>
+                    <button class="tab" onclick="showTab('classes', this)">类结构</button>
+                </div>
+            </div>
+            
+            <div id="modules" class="tab-content active">
+                <div class="mermaid">
+graph LR
+    subgraph ai[ai]
+        ai_codegen_mcp_server_server["server<br/>4C 48F"]
+        ai_codegen_mcp_server_persistence["persistence<br/>4C 20F"]
+        ai_codegen_mcp_server___init__["__init__<br/>0C 0F"]
+        ai_codegen_mcp_server_test_server["test_server<br/>0C 1F"]
+    end
+                </div>
+            </div>
+            
+            <div id="classes" class="tab-content">
+                <div class="mermaid">
+flowchart LR
+    subgraph ai_codegen_mcp_server_server_py["server"]
+        ai_codegen_mcp_server_server_py_PRDStatus[["PRDStatus"]]
+        ai_codegen_mcp_server_server_py_TaskStatus[["TaskStatus"]]
+        ai_codegen_mcp_server_server_py_SearchResult[["SearchResult"]]
+        ai_codegen_mcp_server_server_py_AICodeGenServer[["AICodeGenServer"]]
+        ai_codegen_mcp_server_server_py_funcs{{+48 functions}}
+    end
+    subgraph ai_codegen_mcp_server_persistence_py["persistence"]
+        ai_codegen_mcp_server_persistence_py_StoredParseResult[["StoredParseResult"]]
+        ai_codegen_mcp_server_persistence_py_StoredPRD[["StoredPRD"]]
+        ai_codegen_mcp_server_persistence_py_StoredTask[["StoredTask"]]
+        ai_codegen_mcp_server_persistence_py_PersistenceManager[["PersistenceManager"]]
+        ai_codegen_mcp_server_persistence_py_funcs{{+20 functions}}
+    end
+    subgraph ai_codegen_mcp_server___init___py["__init__"]
+    end
+    subgraph ai_codegen_mcp_server_test_server_py["test_server"]
+        ai_codegen_mcp_server_test_server_py_test_server(("test_server"))
+    end
+    ai_codegen_mcp_server_server_py -.->|import| ai_codegen_mcp_server_persistence_py
+    ai_codegen_mcp_server___init___py -.->|import| ai_codegen_mcp_server_server_py
+    ai_codegen_mcp_server___init___py -.->|import| ai_codegen_mcp_server_persistence_py
+    ai_codegen_mcp_server_test_server_py -.->|import| ai_codegen_mcp_server_server_py
+
+    classDef classNode fill:#4a90d9,color:white,stroke:#333
+    classDef funcNode fill:#67b168,color:white
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            Powered by AI CodeGen MCP Server
+        </footer>
+    </div>
+    
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: false,
+            theme: 'neutral',
+            securityLevel: 'loose',
+            flowchart: {
+                curve: 'basis',
+                padding: 20
+            }
+        });
+        
+        // 渲染所有图表
+        async function renderAllDiagrams() {
+            const elements = document.querySelectorAll('.mermaid');
+            for (const el of elements) {
+                const code = el.textContent;
+                el.innerHTML = '';
+                try {
+                    const { svg } = await mermaid.render('mermaid-' + Math.random().toString(36).substr(2, 9), code);
+                    el.innerHTML = svg;
+                } catch (e) {
+                    el.innerHTML = '<p style="color:red">渲染错误</p>';
+                }
+            }
+        }
+        
+        // 页面加载完成后渲染
+        document.addEventListener('DOMContentLoaded', renderAllDiagrams);
+        
+        function showTab(tabId, btn) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            btn.classList.add('active');
+        }
+    </script>
+</body>
+</html>
