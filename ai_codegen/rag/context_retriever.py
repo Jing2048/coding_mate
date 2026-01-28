@@ -58,7 +58,8 @@ class ContextRetriever:
         
         # 2. 搜索相关接口
         search_results = self.searcher.search_by_intent(intent, limit=max_interfaces)
-        interfaces = [r.entity for r in search_results]
+        # search_by_intent 返回的是 List[CodeEntity]，不是 SearchResult
+        interfaces = search_results if isinstance(search_results, list) else [r.entity for r in search_results]
         
         # 3. 检索依赖关系
         dependencies = self._get_related_dependencies(interfaces, max_dependencies)
