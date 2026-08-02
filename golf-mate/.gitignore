@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Python algo
+algo/.venv/
+algo/**/__pycache__/
+algo/**/*.egg-info/
+algo/.pytest_cache/
+*.py[cod]
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

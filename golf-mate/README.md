@@ -1,37 +1,42 @@
 # Golf Mate
 
-高尔夫伙伴应用 — **从空白状态开始**，按需求迭代开发。
+高尔夫腕部 AI 助手 — **本轮交付算法核心**，App 后续迭代。
 
-## 技术栈
+## 目录
 
-- React 19 + TypeScript
-- Vite 8
+```
+golf-mate/
+├── algo/                 # Python 算法包（P0，可严格 UT）
+│   ├── golfmate_algo/
+│   ├── tests/
+│   └── README.md
+├── docs/
+│   ├── PRD.md
+│   └── research/         # 行业 / 学术 / 开源调研归档
+├── src/                  # 前端空骨架（本轮不扩展）
+└── package.json
+```
 
-## 本地开发
+## 算法快速开始
 
 ```bash
-cd golf-mate
+cd algo
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest -q
+```
+
+详见 [`algo/README.md`](algo/README.md) 与 [`docs/research/00_synthesis.md`](docs/research/00_synthesis.md)。
+
+## 前端骨架（未改产品功能）
+
+```bash
 npm install
 npm run dev
 ```
 
-浏览器打开终端提示的本地地址（默认 `http://localhost:5173`）。
+## 能力分层
 
-## 项目结构
-
-```
-golf-mate/
-├── src/
-│   ├── App.tsx          # 应用入口页（空白起点）
-│   ├── components/      # UI 组件（待建）
-│   ├── features/        # 业务功能（待建）
-│   └── pages/           # 页面（待建）
-├── docs/
-│   └── PRD.md           # 产品需求（待补充）
-└── package.json
-```
-
-## 开发约定
-
-- 当前为 **空状态骨架**：可运行、无业务功能
-- 新功能通过 PRD → 任务拆分 → 实现 → 验证 的流程推进
+- **P0（已完成）**：门控 AHRS → 相位 → 轨迹 → 腕部特征 → 代理诊断 + UT
+- **P1**：单腕→全身、真实数据集回归
+- **P2**：运动签名、前向动力学教师信号

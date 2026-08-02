@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "golfmate-algo"
+version = "0.1.0"
+description = "Golf Mate P0 swing analysis algorithms (IMU → phases → trajectory → diagnostics)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Golf Mate" }]
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+ahrs = ["vqf>=2.0.0"]
+dev = [
+  "pytest>=8.0",
+  "hypothesis>=6.100",
+  "vqf>=2.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["golfmate_algo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
