@@ -1,0 +1,82 @@
+.shell {
+  position: relative;
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  overflow: hidden;
+}
+
+.atmosphere {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 10%, rgba(120, 168, 110, 0.35), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 90% 80%, rgba(46, 90, 72, 0.45), transparent 50%),
+    linear-gradient(165deg, #e8f0e4 0%, #d5e4d0 40%, #b7cbb0 100%);
+  animation: drift 18s ease-in-out infinite alternate;
+}
+
+.atmosphere::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.hero {
+  position: relative;
+  z-index: 1;
+  max-width: 36rem;
+  text-align: center;
+  animation: rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.brand {
+  margin: 0 0 1rem;
+  font-family: var(--font-display);
+  font-size: clamp(2.75rem, 8vw, 4.5rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  line-height: 1;
+}
+
+.headline {
+  margin: 0 0 0.75rem;
+  font-family: var(--font-body);
+  font-size: clamp(1.05rem, 2.5vw, 1.25rem);
+  font-weight: 500;
+  color: var(--ink-soft);
+  letter-spacing: 0.01em;
+}
+
+.lede {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes drift {
+  from {
+    transform: scale(1) translate(0, 0);
+  }
+  to {
+    transform: scale(1.04) translate(-1%, 1%);
+  }
+}
