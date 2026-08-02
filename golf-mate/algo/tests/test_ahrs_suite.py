@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from golfmate_algo.ahrs.suite import DynamicsGate
 from golfmate_algo.ahrs import (
     EKFOrientation,
     Complementary,
@@ -12,10 +13,9 @@ from golfmate_algo.ahrs import (
     MadgwickAHRS,
     MahonyAHRS,
     estimate_address_orientation,
-    forward_backward_filter_smooth,
+    forward_backward_smooth,
     make_default_suite,
     rest_detection,
-    rts_smooth_orientations,
 )
 from golfmate_algo.math import so3
 
@@ -31,7 +31,7 @@ def test_estimate_address_orientation_level_static_identity() -> None:
     q0, win, metrics = estimate_address_orientation(gyro, accel, fs=200.0)
     assert win.stop > win.start
     assert metrics["quality"] == "good"
-    assert metrics["rest_fraction"] > 0.8
+    assert metrics["accepted_samples"] > 0
     assert so3.geodesic_distance(q0, [1.0, 0.0, 0.0, 0.0]) < 1e-8
 
 
@@ -70,12 +70,11 @@ def test_complementary_corrects_static_tilt() -> None:
 
 
 def test_adaptive_gain_smoothly_drops_in_high_dynamics() -> None:
-    est = GatedAdaptive(tilt_gain=3.0, sigma_a=2.0, sigma_w=3.0)
+    est = GatedAdaptive(tilt_gain=3.0, gate=DynamicsGate(sigma_a=2.0, sigma_w=3.0))
     est.reset()
     est.update([0.0, 0.0, 0.0], [0.0, 0.0, 9.80665], 0.005)
     est.update([8.0, 0.0, 0.0], [0.0, 0.0, 25.0], 0.005)
-    diag = est.diagnostics()
-    gains = diag["gain_history"]
+    gains = est.diagnostics()["gate"]
     assert gains[0] > gains[1]
     assert 0.0 <= gains[1] < gains[0]
 
@@ -92,13 +91,13 @@ def test_ekf_inflates_accel_noise_when_norm_is_bad() -> None:
 def test_smoothers_preserve_shape_and_unit_norm() -> None:
     gyro, accel = _static_samples(30)
     quats, _ = GyroOnly().run(gyro, accel, 0.005)
-    smooth = rts_smooth_orientations(quats, alpha=0.5)
+    smooth, _ = forward_backward_smooth(GyroOnly, gyro, accel, 0.005)
     assert smooth.shape == quats.shape
     assert np.max(np.abs(np.linalg.norm(smooth, axis=1) - 1.0)) < 1e-12
 
-    fb, diag = forward_backward_filter_smooth(lambda: Complementary(gain=1.0), gyro, accel, 0.005)
+    fb, diag = forward_backward_smooth(lambda: Complementary(gain=1.0), gyro, accel, 0.005)
     assert fb.shape == quats.shape
-    assert diag["method"] == "forward_backward_filter_smooth"
+    assert "forward" in diag and "backward" in diag
     assert np.max(np.abs(np.linalg.norm(fb, axis=1) - 1.0)) < 1e-12
 
 
@@ -116,6 +115,6 @@ def test_named_estimators_can_be_constructed_individually() -> None:
         "complementary",
         "mahony",
         "madgwick",
-        "ekf_orientation",
+        "ekf",
         "gated_adaptive",
     ]

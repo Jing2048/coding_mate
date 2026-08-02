@@ -7,22 +7,24 @@ from golfmate_algo.ahrs.gated_vqf import (
     HAS_VQF,
     gravity_remove,
 )
-from golfmate_algo.ahrs.init import estimate_address_orientation, rest_detection
+from golfmate_algo.ahrs.init import (
+    estimate_address_orientation,
+    estimate_gyro_bias,
+    rest_detection,
+)
 from golfmate_algo.ahrs.suite import (
-    EKFOrientation,
+    TUNING_TABLE,
     Complementary,
+    EKFOrientation,
     FilterTuningSummary,
     GatedAdaptive,
     GyroOnly,
     MadgwickAHRS,
     MahonyAHRS,
     OrientationEstimator,
-    TUNING_TABLE,
-    forward_backward_filter_smooth,
+    forward_backward_smooth,
     make_default_suite,
     quat_slerp,
-    rts_smooth_orientations,
-    tuning_table_as_dicts,
 )
 
 __all__ = [
@@ -40,11 +42,10 @@ __all__ = [
     "OrientationEstimator",
     "TUNING_TABLE",
     "estimate_address_orientation",
-    "forward_backward_filter_smooth",
+    "estimate_gyro_bias",
+    "forward_backward_smooth",
     "gravity_remove",
     "make_default_suite",
     "quat_slerp",
     "rest_detection",
-    "rts_smooth_orientations",
-    "tuning_table_as_dicts",
 ]

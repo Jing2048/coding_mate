@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from golfmate_algo.coach.diagnostics import diagnose
 from golfmate_algo.events.phase import detect_phases
@@ -25,18 +26,18 @@ def test_phase_detection_on_synthetic_swing():
     phases.validate_order()
 
 
-def test_swing_plane_on_true_circle():
-    syn = planar_circular_swing(radius_m=0.5)
-    # Use true positions for plane fit
+@pytest.mark.parametrize("tilt_deg", [45.0, 55.0, 70.0])
+def test_swing_plane_recovers_geometry(tilt_deg: float):
+    syn = planar_circular_swing(radius_m=0.5, plane_tilt_deg=tilt_deg)
     mask = np.zeros(len(syn.packet.t), dtype=bool)
     a, f = syn.phases_true.address_idx, syn.phases_true.finish_idx
     mask[a : f + 1] = True
     plane = fit_swing_plane(syn.positions_true, mask=mask)
-    # Normal should align with X axis
-    assert abs(abs(plane.normal[0]) - 1.0) < 0.05
     assert abs(plane.radius - 0.5) < 0.05
     assert plane.plane_residual_rms < 0.02
     assert plane.circle_residual_rms < 0.05
+    # plane_angle_deg is the tilt of the plane away from horizontal
+    assert abs(plane.plane_angle_deg - tilt_deg) < 3.0
 
 
 def test_zupt_reduces_endpoint_velocity():
