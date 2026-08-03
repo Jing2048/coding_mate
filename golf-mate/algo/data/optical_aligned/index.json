@@ -1,0 +1,49 @@
+{
+  "version": "inhouse_optical_aligned_synth_v1",
+  "cases": [
+    {
+      "subject_id": "OA_oa_driver_a",
+      "swing_number": 11,
+      "impact_idx": 292,
+      "fs_hz": 200.0,
+      "n": 453,
+      "provenance": "inhouse_optical_aligned_synth_v1",
+      "reference": {
+        "club_speed_m_s": 32.07967584557407,
+        "fs_hz": 200.0,
+        "gyro_range_deg_s": 2000.0,
+        "accel_range_g": 16.0,
+        "optical_club_path_span_m": 1.9468296592425058
+      },
+      "adapter_meta": {
+        "peak_omega_rad_s": 20.52715679946517,
+        "path_span_m": 0.7862307626868078,
+        "casting": 0.0,
+        "clip": 0.0,
+        "protocol_fs_hz": 200.0
+      }
+    },
+    {
+      "subject_id": "OA_oa_driver_b",
+      "swing_number": 17,
+      "impact_idx": 288,
+      "fs_hz": 200.0,
+      "n": 449,
+      "provenance": "inhouse_optical_aligned_synth_v1",
+      "reference": {
+        "club_speed_m_s": 36.07550305231573,
+        "fs_hz": 200.0,
+        "gyro_range_deg_s": 2000.0,
+        "accel_range_g": 16.0,
+        "optical_club_path_span_m": 2.0194530647833457
+      },
+      "adapter_meta": {
+        "peak_omega_rad_s": 20.69178136990119,
+        "path_span_m": 0.802756989456101,
+        "casting": 0.0,
+        "clip": 0.0,
+        "protocol_fs_hz": 200.0
+      }
+    }
+  ]
+}

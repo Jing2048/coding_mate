@@ -32,9 +32,12 @@ CATALOG: tuple[GoldenSource, ...] = (
         commercial_eval_ok=True,
         signals="PN 21-bone mocap-derived wrist IMU (not raw MEMS)",
         ground_truth="Joint kinematics + annotated impact + launch monitor",
-        n_note="24 subjects / 1557 swings; local Sub07 extracted; elite Sub13–24 in manifest",
+        n_note="24 subjects / 1557 swings; local Sub07 + elite Sub13 (Sub13–24 in manifest)",
         rate_note="Irregular PN timestamps → fixed-grid resample in adapter",
-        integration="bench/datasets/multisense.py + strata (elite / high club-speed)",
+        integration=(
+            "bench/datasets/multisense.py + strata (elite / high club-speed); "
+            "scripts/fetch_multisense.py --elite"
+        ),
         url="https://doi.org/10.7910/DVN/LCCLLW",
         honesty="External human motion distribution; NOT wrist MEMS noise/mount",
     ),
@@ -71,11 +74,17 @@ CATALOG: tuple[GoldenSource, ...] = (
         commercial_eval_ok=False,
         signals="Bosch wrist MEMS ±16g/2000dps @ 200 Hz vs optical",
         ground_truth="Optical markers on IMU / arm / club",
-        n_note="20 RH golfers; 389 usable swings",
+        n_note="20 RH golfers; 389 usable swings; in-house 200 Hz protocol twin until raw lands",
         rate_note="200 Hz",
-        integration="bench/golden/scirep_budgets.py (published ceilings only)",
+        integration=(
+            "bench/golden/scirep_budgets.py + bench/datasets/optical_aligned.py "
+            "(protocol twin)"
+        ),
         url="https://doi.org/10.1038/s41598-024-59949-w",
-        honesty="Best published single-wrist MEMS protocol; data not public",
+        honesty=(
+            "Best published single-wrist MEMS protocol; raw not public — "
+            "CI uses in-house optical-aligned synth twin at 200 Hz"
+        ),
     ),
     GoldenSource(
         name="WIT-KinNet 2026",
@@ -86,7 +95,7 @@ CATALOG: tuple[GoldenSource, ...] = (
         ground_truth="OMC 120 Hz full-body joints",
         n_note="36 golfers × clubs × amplitudes",
         rate_note="acc/gyro 100 Hz",
-        integration="stub: bench/datasets/wit_kinnet.py (download hook)",
+        integration="bench/datasets/wit_kinnet.py (contract + auto-ready loader)",
         url="https://arxiv.org/abs/2606.22876",
         honesty="Highest product-fit when released; chase author share",
     ),

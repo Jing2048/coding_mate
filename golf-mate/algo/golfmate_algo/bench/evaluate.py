@@ -29,7 +29,7 @@ from golfmate_algo.ahrs import init as ahrs_init
 from golfmate_algo.ahrs import suite as ahrs_suite
 from golfmate_algo.bench.ablation import benchmark_degradation
 from golfmate_algo.bench.datasets import cmu64, multisense as msg
-from golfmate_algo.bench.datasets import wit_kinnet
+from golfmate_algo.bench.datasets import optical_aligned, wit_kinnet
 from golfmate_algo.bench.gates import check_gates
 from golfmate_algo.bench.golden.catalog import ranked_catalog
 from golfmate_algo.bench.golden import scirep_budgets
@@ -418,6 +418,117 @@ def _score_multisense(
     }
 
 
+def _score_external_cases(
+    cases: list[Any],
+    n_boot: int,
+    *,
+    track_label: str,
+    provenance: str,
+    caveat: str,
+    seed_base: int = 70,
+) -> dict[str, Any]:
+    """Score a list of ExternalSwingCase-like objects (optical / WIT / etc.)."""
+    if not cases:
+        return {
+            "status": "unavailable",
+            "reason": "no cases",
+            "track": track_label,
+            "provenance": provenance,
+        }
+    ori: list[float] = []
+    impact: list[float] = []
+    pos: list[float] = []
+    fails = 0
+    for case in cases:
+        try:
+            report = analyze_swing(case.packet)
+        except Exception:
+            fails += 1
+            continue
+        fs = case.packet.frame.fs_hz
+        impact.append(abs(report.phases.impact_idx - case.impact_idx) / fs * 1000.0)
+        nq = min(report.quats.shape[0], case.quats_ref.shape[0])
+        aligned = _yaw_align(report.quats[:nq], case.quats_ref[:nq], 0)
+        ori.append(float(np.mean(orientation_error_deg(aligned, case.quats_ref[:nq]))))
+        truth = case.positions_ref[:nq] - case.positions_ref[0]
+        pos_e = _yaw_rotate_positions(
+            report.positions[:nq],
+            report.quats[:nq],
+            case.quats_ref[:nq],
+            0,
+        )
+        pos.append(float(np.mean(np.linalg.norm(pos_e - truth, axis=1) * 100.0)))
+    n = len(ori) + fails
+    if not ori:
+        return {
+            "status": "unavailable",
+            "reason": "all pipeline failures",
+            "track": track_label,
+            "pipeline_failures": fails,
+            "provenance": provenance,
+        }
+    return {
+        "status": "ok",
+        "track": track_label,
+        "provenance": provenance,
+        "n_swings": len(ori),
+        "pipeline_failures": fails,
+        "orientation_deg": _sum_dict(summarize(ori, n_boot=n_boot, seed=seed_base)),
+        "impact_ms": _sum_dict(summarize(impact, n_boot=n_boot, seed=seed_base + 1)),
+        "position_cm": _sum_dict(summarize(pos, n_boot=n_boot, seed=seed_base + 2)),
+        "events": {
+            "impact": _sum_dict(summarize(impact, n_boot=n_boot, seed=seed_base + 1))
+        },
+        "caveat": caveat,
+        "n_attempted": n,
+    }
+
+
+def _score_optical_aligned(n_boot: int, max_swings: int = 6) -> dict[str, Any]:
+    st = optical_aligned.dataset_status()
+    cases = list(optical_aligned.iter_local_swings(max_swings=max_swings))
+    out = _score_external_cases(
+        cases,
+        n_boot,
+        track_label="external_optical_aligned",
+        provenance=optical_aligned.PROVENANCE,
+        caveat=st["honesty"],
+        seed_base=80,
+    )
+    out["dataset"] = st
+    out["protocol_fs_hz"] = st["fs_hz"]
+    out["scirep_budgets"] = {
+        "position_cm": scirep_budgets.POSITION_CM_WHOLE_SWING,
+        "orientation_deg_soft": scirep_budgets.ORIENTATION_DEG_SOFT,
+        "product_orientation_deg": scirep_budgets.PRODUCT_ORIENTATION_DEG,
+        "product_impact_ms": scirep_budgets.PRODUCT_IMPACT_MS,
+        "product_position_cm": scirep_budgets.PRODUCT_POSITION_CM,
+    }
+    return out
+
+
+def _score_wit_kinnet(n_boot: int, max_swings: int = 20) -> dict[str, Any]:
+    st = wit_kinnet.dataset_status()
+    if not st["ready"]:
+        return {
+            "status": "unavailable",
+            "reason": st.get("reason", "not ready"),
+            "track": "external_wit_kinnet",
+            **st,
+        }
+    cases = list(wit_kinnet.iter_local_swings(max_swings=max_swings))
+    out = _score_external_cases(
+        cases,
+        n_boot,
+        track_label="external_wit_kinnet",
+        provenance=wit_kinnet.PROVENANCE,
+        caveat="Real smartwatch MEMS + OMC when author share is present.",
+        seed_base=90,
+    )
+    out.update({k: st[k] for k in ("arxiv", "contract", "product_fit") if k in st})
+    return out
+
+
 def _score_cmu64(n_boot: int, max_swings: int = 8) -> dict[str, Any]:
     st = cmu64.dataset_status()
     if not st["ready"]:
@@ -748,12 +859,54 @@ def render_zero_trust_markdown(payload: dict[str, Any]) -> str:
     lines.append("")
 
     wit = by.get("external_wit_kinnet", {})
-    lines.append("## 7f. WIT-KinNet stub（最高产品契合，待发布）")
+    lines.append("## 7f. WIT-KinNet（最高产品契合；合约就绪检测）")
     lines.append("")
-    lines.append(
-        f"状态：**{wit.get('status', 'unavailable')}** — {wit.get('reason', 'n/a')} · "
-        f"{wit.get('arxiv', '')}"
-    )
+    if wit.get("status") == "ok" or wit.get("ready") is True:
+        lines.append(
+            f"状态：**ok** · n={wit.get('n_swings')} · {wit.get('arxiv', '')}"
+        )
+        lines.append("")
+        lines.append("| 指标 | mean [CI] |")
+        lines.append("|------|----------:|")
+        lines.append(f"| 姿态 ° | {_fmt_ci(wit.get('orientation_deg'))} |")
+        lines.append(f"| Impact ms | {_fmt_ci(wit.get('impact_ms'))} |")
+        lines.append(f"| 位置 cm | {_fmt_ci(wit.get('position_cm'))} |")
+    else:
+        lines.append(
+            f"状态：**{wit.get('status', 'unavailable')}** — {wit.get('reason', 'n/a')} · "
+            f"{wit.get('arxiv', '')}"
+        )
+        lines.append(
+            f"Drop contract: `{wit.get('contract', {}).get('contract_version', 'wit-kinnet-contract-v1')}` "
+            "under `data/wit_kinnet/`."
+        )
+    lines.append("")
+
+    oa = by.get("external_optical_aligned", {})
+    lines.append("## 7g. In-house SciRep-protocol optical-aligned twin (200 Hz)")
+    lines.append("")
+    if oa.get("status") != "ok":
+        lines.append(f"状态：**{oa.get('status', 'unavailable')}** — {oa.get('reason', 'n/a')}")
+    else:
+        lines.append(
+            f"状态：**ok** · n={oa.get('n_swings')} · fs={oa.get('protocol_fs_hz')} Hz · "
+            f"{oa.get('caveat', '')}"
+        )
+        lines.append("")
+        lines.append("| 指标 | mean [CI] | SciRep/product ref |")
+        lines.append("|------|----------:|-------------------:|")
+        bud = oa.get("scirep_budgets") or {}
+        lines.append(
+            f"| 姿态 ° | {_fmt_ci(oa.get('orientation_deg'))} | "
+            f"soft {bud.get('orientation_deg_soft')} / product {bud.get('product_orientation_deg')} |"
+        )
+        lines.append(
+            f"| Impact ms | {_fmt_ci(oa.get('impact_ms'))} | product {bud.get('product_impact_ms')} |"
+        )
+        lines.append(
+            f"| 位置 cm | {_fmt_ci(oa.get('position_cm'))} | "
+            f"SciRep {bud.get('position_cm')} / product {bud.get('product_position_cm')} |"
+        )
     lines.append("")
 
     deg = payload.get("degradation", {})
@@ -772,9 +925,11 @@ def render_zero_trust_markdown(payload: dict[str, Any]) -> str:
     lines.append("")
     lines.append("```bash")
     lines.append("cd golf-mate/algo && source .venv/bin/activate")
-    lines.append("python scripts/fetch_multisense.py --max-swings 30")
+    lines.append("python scripts/fetch_multisense.py --subject Sub13 --max-swings 20")
+    lines.append("python scripts/fetch_multisense.py --elite --elite-priority Sub13,Sub19,Sub23 --max-swings 15")
     lines.append("python scripts/fetch_cmu64.py")
-    lines.append("python scripts/seal_holdout.py")
+    lines.append("python -c \"from golfmate_algo.bench.datasets import optical_aligned as oa; oa.materialize()\"")
+    lines.append("python -c \"from golfmate_algo.bench.datasets import wit_kinnet as w; w.write_contract_readme()\"")
     lines.append("python -m golfmate_algo.bench.evaluate --mode full")
     lines.append("pytest -q")
     lines.append("```")
@@ -887,11 +1042,12 @@ def run_evaluation(
                 "track": "external_multisense_elite",
             }
         by_track["external_cmu64"] = _score_cmu64(n_boot, max_swings=5 if quick else 10)
-        by_track["external_wit_kinnet"] = {
-            "status": "unavailable",
-            **wit_kinnet.dataset_status(),
-            "track": "external_wit_kinnet",
-        }
+        by_track["external_wit_kinnet"] = _score_wit_kinnet(
+            n_boot, max_swings=5 if quick else 20
+        )
+        by_track["external_optical_aligned"] = _score_optical_aligned(
+            n_boot, max_swings=4 if quick else 6
+        )
     else:
         by_track["external_multisense"] = {
             "status": "skipped",
@@ -901,6 +1057,10 @@ def run_evaluation(
             "status": "skipped",
             "reason": "include_multisense=False",
         }
+        by_track["external_optical_aligned"] = _score_optical_aligned(
+            n_boot, max_swings=4 if quick else 6
+        )
+        by_track["external_wit_kinnet"] = _score_wit_kinnet(n_boot, max_swings=5)
 
     session_seeds = list(range(n_dev or 8))[: (2 if quick else 8)]
     session = _run_session_mc(session_seeds, n_boot)

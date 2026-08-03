@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -94,6 +96,114 @@ def test_multisense_high_speed_filter():
 def test_wit_kinnet_stub_not_ready():
     st = wit_kinnet.dataset_status()
     assert st["ready"] is False
+    assert "contract" in st
+    assert st["contract"]["contract_version"].startswith("wit-kinnet")
+
+
+def test_elite_manifest_resolves_and_lists_subjects():
+    from golfmate_algo.reference.elite import elite_subject_ids, load_elite_manifest
+
+    m = load_elite_manifest()
+    assert m.get("status") != "missing_manifest"
+    ids = elite_subject_ids()
+    assert "Sub13" in ids and "Sub19" in ids and "Sub24" in ids
+    assert Path(m["resolved_path"]).exists()
+
+
+def test_multisense_elite_filter_when_extracted():
+    st = msg.dataset_status()
+    if not st["ready"]:
+        pytest.skip("MultiSense not extracted")
+    from golfmate_algo.reference.elite import elite_subject_ids
+
+    elite = elite_subject_ids()
+    available = set(st.get("subjects_extracted", []))
+    elite_local = [s for s in elite if s in available]
+    if not elite_local:
+        pytest.skip("elite subjects not extracted locally")
+    cases = list(msg.iter_local_swings(max_swings=5, subjects=elite_local))
+    assert cases
+    for c in cases:
+        assert c.subject_id in elite_local
+
+
+def test_optical_aligned_protocol_twin():
+    from golfmate_algo.bench.datasets import optical_aligned as oa
+
+    st = oa.dataset_status()
+    assert st["ready"] is True
+    assert st["fs_hz"] == 200.0
+    cases = list(oa.iter_local_swings(max_swings=3))
+    assert len(cases) == 3
+    case = cases[0]
+    assert case.packet.frame.fs_hz == pytest.approx(200.0, abs=1e-6)
+    assert case.provenance.startswith("inhouse_optical_aligned")
+    assert case.quats_ref.shape[0] == case.packet.t.shape[0]
+    report = analyze_swing(case.packet)
+    assert report.phases.impact_idx > report.phases.top_idx
+    paths = oa.materialize(max_swings=2)
+    assert paths and paths[0].exists()
+
+
+def test_wit_kinnet_contract_readme():
+    path = wit_kinnet.write_contract_readme()
+    assert path.exists()
+    assert "wit-kinnet-contract-v1" in path.read_text(encoding="utf-8")
+
+
+def test_gates_elite_and_optical_ceilings():
+    payload = {
+        "by_track": {
+            "cross_multibody": {
+                "events": {"impact": {"consumer": {"mean": 8.0}}},
+                "e2e": {
+                    "consumer": {
+                        "position_cm": {"mean": 12.0},
+                        "orientation_deg": {"mean": 4.0},
+                    }
+                },
+                "trajectory": {
+                    "lever_arm_residual_m_s2": {"consumer": {"mean": 5.0}},
+                    "lever_arm_invalid": {"consumer": {"mean": 0.0}},
+                },
+            },
+            "violation_stress": {
+                "trajectory": {
+                    "lever_arm_residual_m_s2": {"consumer": {"mean": 8.0}},
+                    "lever_arm_invalid": {"consumer": {"mean": 0.0}},
+                },
+            },
+            "external_multisense_elite": {
+                "status": "ok",
+                "n_swings": 10,
+                "subjects_filter": ["Sub13"],
+                "orientation_deg": {"mean": 12.0},
+                "position_cm": {"mean": 70.0},
+            },
+            "external_optical_aligned": {
+                "status": "ok",
+                "n_swings": 4,
+                "protocol_fs_hz": 200.0,
+                "orientation_deg": {"mean": 12.0},
+                "impact_ms": {"mean": 120.0},
+                "position_cm": {"mean": 80.0},
+            },
+            "external_wit_kinnet": {
+                "status": "unavailable",
+                "reason": "pending author share",
+            },
+        },
+        "session": {
+            "gated_adaptive": {"consumer": {"mean": 5.0}},
+            "gyro_only": {"consumer": {"mean": 40.0}},
+        },
+        "meta": {"disclaimer_isomorphic_upper_bound": True},
+        "holdout": {"enabled": False},
+    }
+    g = gates_fn(payload)
+    assert g["pass"] is True
+    assert any("elite" in n for n in g["notes"])
+    assert any("optical_aligned" in n for n in g["notes"])
 
 
 def test_gates_robust_track_budgets():
@@ -153,6 +263,8 @@ def test_quick_eval_includes_robust_tracks():
     assert "pro_regime" in payload["by_track"]
     assert "casting_pathology" in payload["by_track"]
     assert "lefty_mirror" in payload["by_track"]
+    assert "external_optical_aligned" in payload["by_track"]
+    assert payload["by_track"]["external_optical_aligned"]["status"] == "ok"
     # Robust-only run should not trip cross_multibody product gates.
     lefty = payload["by_track"]["lefty_mirror"]["e2e"]["consumer"]
     assert lefty["orientation_deg"]["mean"] < 15.0

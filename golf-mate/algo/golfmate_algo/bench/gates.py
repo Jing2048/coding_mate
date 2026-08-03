@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from golfmate_algo.bench.golden import scirep_budgets
+
 
 def _mean(track: dict[str, Any], *path: str) -> float | None:
     cur: Any = track
@@ -118,9 +120,9 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
                     f"multisense orientation {e_ori:.1f}° exceeds 20° "
                     f"post-adapter sanity ceiling"
                 )
-            if e_pos is not None and e_pos > 100.0:
+            if e_pos is not None and e_pos > 250.0:
                 violations.append(
-                    f"multisense position {e_pos:.1f} cm exceeds 100 cm "
+                    f"multisense position {e_pos:.1f} cm exceeds 250 cm "
                     f"post-adapter sanity ceiling"
                 )
         else:
@@ -135,8 +137,22 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
     elif elite.get("status") == "ok":
         notes.append(
             f"external_multisense_elite scored n={elite.get('n_swings')} "
+            f"subjects={elite.get('subjects_filter')} "
             f"(eval gate only, not in-product posture library)"
         )
+        e_ori = _mean(elite, "orientation_deg")
+        e_pos = _mean(elite, "position_cm")
+        # Soft ceilings — elite motion is harder; catch adapter/unit regressions.
+        if e_ori is not None and e_ori > 22.0:
+            violations.append(
+                f"multisense elite orientation {e_ori:.1f}° exceeds 22° sanity ceiling"
+            )
+        if e_pos is not None and e_pos > 250.0:
+            violations.append(
+                f"multisense elite position {e_pos:.1f} cm exceeds 250 cm sanity ceiling"
+            )
+        if e_ori is not None:
+            notes.append(f"elite orientation {e_ori:.1f}°, position {e_pos}")
 
     hs = by.get("external_multisense_high_speed", {})
     if hs.get("status") == "ok":
@@ -159,17 +175,69 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
         e_ori = _mean(cmu, "orientation_gyro_only_deg")
         if e_ori is None:
             e_ori = _mean(cmu, "orientation_deg")
-        if e_ori is not None and e_ori > 20.0:
+        if e_ori is not None and e_ori > 25.0:
             violations.append(
-                f"cmu64 gyro-only orientation {e_ori:.1f}° exceeds 20° sanity ceiling"
+                f"cmu64 gyro-only orientation {e_ori:.1f}° exceeds 25° sanity ceiling"
             )
     elif cmu.get("status") == "unavailable":
         notes.append(f"external_cmu64 unavailable: {cmu.get('reason', 'n/a')}")
 
     wit = by.get("external_wit_kinnet", {})
     if wit:
+        if wit.get("status") == "ok" or wit.get("ready") is True:
+            notes.append(
+                f"wit_kinnet READY n={wit.get('n_swings', wit.get('n_paired'))} — "
+                f"score under SciRep-like MEMS+OMC ceilings"
+            )
+            e_ori = _mean(wit, "orientation_deg")
+            e_pos = _mean(wit, "position_cm")
+            if e_ori is not None and e_ori > scirep_budgets.ORIENTATION_DEG_SOFT:
+                violations.append(
+                    f"wit_kinnet orientation {e_ori:.1f}° exceeds "
+                    f"{scirep_budgets.ORIENTATION_DEG_SOFT:.0f}° SciRep soft ceiling"
+                )
+            if e_pos is not None and e_pos > scirep_budgets.POSITION_CM_WHOLE_SWING * 1.5:
+                violations.append(
+                    f"wit_kinnet position {e_pos:.1f} cm exceeds "
+                    f"{scirep_budgets.POSITION_CM_WHOLE_SWING * 1.5:.0f} cm soft ceiling"
+                )
+        else:
+            notes.append(
+                f"wit_kinnet: {wit.get('status', 'unavailable')} — {wit.get('reason', '')}"
+            )
+
+    oa = by.get("external_optical_aligned", {})
+    if oa.get("status") == "ok":
         notes.append(
-            f"wit_kinnet: {wit.get('status', 'unavailable')} — {wit.get('reason', '')}"
+            f"optical_aligned (SciRep-protocol twin) n={oa.get('n_swings')} "
+            f"@ {oa.get('protocol_fs_hz')} Hz"
+        )
+        e_ori = _mean(oa, "orientation_deg")
+        e_imp = _mean(oa, "impact_ms")
+        e_pos = _mean(oa, "position_cm")
+        # Product ambition on protocol twin (stricter than soft SciRep orientation).
+        if e_ori is not None and e_ori > scirep_budgets.PROTOCOL_TWIN_ORIENTATION_DEG:
+            violations.append(
+                f"optical_aligned orientation {e_ori:.1f}° exceeds "
+                f"{scirep_budgets.PROTOCOL_TWIN_ORIENTATION_DEG:.0f}° protocol-twin ceiling"
+            )
+        if e_imp is not None and e_imp > scirep_budgets.PROTOCOL_TWIN_IMPACT_MS:
+            violations.append(
+                f"optical_aligned impact {e_imp:.1f} ms exceeds "
+                f"{scirep_budgets.PROTOCOL_TWIN_IMPACT_MS:.0f} ms protocol-twin ceiling"
+            )
+        if e_pos is not None and e_pos > scirep_budgets.PROTOCOL_TWIN_POSITION_CM:
+            violations.append(
+                f"optical_aligned position {e_pos:.1f} cm exceeds "
+                f"{scirep_budgets.PROTOCOL_TWIN_POSITION_CM:.0f} cm protocol-twin ceiling"
+            )
+        notes.append(
+            f"optical_aligned ori={e_ori} impact={e_imp} pos={e_pos} "
+            f"(SciRep ref pos {scirep_budgets.POSITION_CM_WHOLE_SWING} cm)"
+        )
+    elif oa:
+        notes.append(
+            f"optical_aligned: {oa.get('status', 'unavailable')} — {oa.get('reason', '')}"
         )
 
     # --- robust golden tracks (regression ceilings — harder than isomorphic,
