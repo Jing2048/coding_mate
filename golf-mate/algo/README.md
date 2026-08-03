@@ -4,7 +4,8 @@ Hardware-agnostic golf swing analysis from a single wrist / glove-card 6-axis IM
 validated by head-to-head benchmarking against classical baselines rather than by
 inspection.
 
-Results and reasoning: [`../docs/research/04_benchmark.md`](../docs/research/04_benchmark.md).
+Results: [`../docs/research/05_benchmark_report.md`](../docs/research/05_benchmark_report.md)
+(summary + industry compare: [`../docs/research/04_benchmark.md`](../docs/research/04_benchmark.md)).
 
 ## Install and test
 
@@ -12,8 +13,9 @@ Results and reasoning: [`../docs/research/04_benchmark.md`](../docs/research/04_
 cd golf-mate/algo
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                                # 56 tests
-python -m golfmate_algo.bench.harness    # full benchmark table
+pytest -q                                              # unit + adversarial + eval smoke
+python -m golfmate_algo.bench.evaluate --seeds 8       # full MC report → docs/research/
+python -m golfmate_algo.bench.harness                  # compact legacy table
 ```
 
 ## Conventions

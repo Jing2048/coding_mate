@@ -1,0 +1,6 @@
+bench_out/
+.pytest_cache/
+.hypothesis/
+.venv/
+*.egg-info/
+__pycache__/

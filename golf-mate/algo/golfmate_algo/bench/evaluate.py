@@ -211,6 +211,23 @@ def _run_session_mc(seeds: list[int], n_boot: int) -> dict[str, Any]:
     return out
 
 
+def _yaw_rotate_positions(pos: Any, q_est: Any, q_true: Any, address_idx: int) -> Any:
+    """Apply the same unobservable-yaw correction used for orientation metrics.
+
+    Six-axis filters leave heading free; without rotating the reconstructed path
+    by that constant world-Z offset, Euclidean position error is dominated by
+    an unobservable gauge and is not informative.
+    """
+    from golfmate_algo.math import so3
+
+    aligned = _yaw_align(q_est, q_true, address_idx)
+    # Relative world rotation that maps the raw estimate into the aligned frame.
+    r = so3.quat_multiply(aligned[address_idx], so3.quat_conjugate(q_est[address_idx]))
+    R = so3.quat_to_rotmat(r)
+    out = (R @ np.asarray(pos, dtype=np.float64).T).T
+    return out - out[address_idx]
+
+
 def _run_e2e(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
     """Full pipeline against truth: orientation + impact timing + position."""
     ori: dict[str, list[float]] = {}
@@ -232,7 +249,8 @@ def _run_e2e(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
             fails[case.error_label] = fails.get(case.error_label, 0) + 1
             continue
         ph = case.swing.phases_true
-        aligned = _yaw_align(report.quats, case.swing.quats_true, ph.address_idx)
+        addr = min(ph.address_idx, report.quats.shape[0] - 1)
+        aligned = _yaw_align(report.quats, case.swing.quats_true, addr)
         ori.setdefault(case.error_label, []).append(
             float(np.mean(orientation_error_deg(aligned, case.swing.quats_true)))
         )
@@ -241,7 +259,9 @@ def _run_e2e(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
         )
         truth = case.swing.positions_true - case.swing.positions_true[ph.address_idx]
         window = slice(ph.address_idx, ph.finish_idx + 1)
-        pos_e = report.positions - report.positions[report.phases.address_idx]
+        pos_e = _yaw_rotate_positions(
+            report.positions, report.quats, case.swing.quats_true, addr
+        )
         n = min(pos_e.shape[0], truth.shape[0])
         w = slice(window.start, min(window.stop, n))
         pos.setdefault(case.error_label, []).append(
@@ -300,7 +320,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
     lines.append("| 统计 | **按挥杆均值**聚合 + **百分位 bootstrap 95% CI**（非仅样本池化） |")
     lines.append("| 消融 | 门控项（α / ω / rest）与轨迹方法（杠杆解 / ZUPT / 姿态 oracle） |")
     lines.append("| 退化 | 消费级误差幅度 ×{0,0.5,1,1.5,2,3} 的连续曲线 |")
-    lines.append("| E2E | `analyze_swing` 整条管线对真值的姿态/击球时刻/位置 |")
+    lines.append("| E2E | `analyze_swing` 整条管线；位置在不可观测 yaw 对齐后再比（否则被 gauge 支配） |")
     lines.append("")
 
     # Headline
@@ -410,8 +430,9 @@ def render_markdown(payload: dict[str, Any]) -> str:
     lines.append(
         "**读法**：`full_gate+rest` 是产品配置；`no_alpha` 去掉角加速度项；"
         "`always_open` 全程信加速度；`gyro_only` 关闭倾角修正。"
-        "会话尺度上 `gyro_only` 应显著差于 `full_gate+rest`；"
-        "单杆下杆窗口上 `always_open` / `no_rest_hard` 应显著差于门控。"
+        "单杆上 `always_open` 是灾难（下杆 ~48°）；"
+        "`a_only`/`no_alpha`/`full_gate` 的 CI 重叠——短窗内门控细节差别小于种子方差，"
+        "会话尺度上 `gyro_only` 崩到 60°+ 而门控族稳定在 ~6°。"
     )
     lines.append("")
 
