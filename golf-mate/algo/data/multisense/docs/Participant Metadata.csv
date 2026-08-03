@@ -1,0 +1,26 @@
+﻿Participant Number,Age,Gender,Height (cm),Weight (kg),Shoe Size (mm),Swing Handedness,Hand Dominance,Years of Golfing Experience,Lesson-Taking Experience,Professional License (Yes or No),License Type,Self-Reported Expertise Level (7-Likert),Whether to Consent to Data Disclosure?
+Sub01,23,Female,155,47,230,Right,Right,1 to 6 months,1 to 6 months,No,-,2,Agree
+Sub02,47,Female,169,51,240,Right,Right,6 months to 1 year,No prior experience,No,-,2,Agree
+Sub03,55,Female,150,63,225,Right,Right,1 to 3 years,1 to 6 months,No,-,2,Agree
+Sub04,20,Male,170,60,260,Right,Right,1 to 6 months,1 to 6 months,No,-,1,Agree
+Sub05,58,Female,160,65,250,Right,Right,1 to 6 months,1 to 6 months,No,-,2,Agree
+Sub06,57,Female,162,56,245,Right,Right,6 months to 1 year,1 to 6 months,No,-,2,Agree
+Sub07,22,Male,188,85,280,Right,Right,1 to 6 months,1 to 6 months,No,-,2,Agree
+Sub08,35,Male,165,83,260,Right,Right,6 months to 1 year,1 to 6 months,No,-,3,Agree
+Sub09,52,Male,172,80,265,Right,Right,3 to 5 years,1 to 6 months,No,-,3,Agree
+Sub10,38,Male,180,89,265,Right,Right,3 to 5 years,6 months to 1 year,No,-,4,Agree
+Sub11,58,Female,165,64,240,Right,Left,More than 10 years,6 months to 1 year,No,-,4,Agree
+Sub12,52,Male,187,80,280,Right,Right,More than 10 years,1 to 3 years,No,-,4,Agree
+Sub13,52,Female,167,54,245,Right,Left,3 to 5 years,1 to 3 years,No,-,5,Agree
+Sub14,30,Male,171,72,245,Right,Right,1 to 3 years,1 to 6 months,No,-,4,Agree
+Sub15,57,Male,165,71,255,Right,Right,More than 10 years,1 to 6 months,No,-,4,Agree
+Sub16,20,Male,184,83,280,Right,Right,3 to 5 years,3 to 5 years,No,-,5,Agree
+Sub17,64,Male,176,73,270,Right,Left,More than 10 years,1 to 3 years,Yes,USGTF Teaching Professional,6,Agree
+Sub18,58,Male,177,65,255,Right,Left,More than 10 years,1 to 6 months,Yes,KTPGA Teaching Professional,4,Agree
+Sub19,51,Male,180,80,270,Right,Right,More than 10 years,No prior experience,Yes,KPGA Associate Member,7,Agree
+Sub20,31,Male,175,77,265,Right,Right,More than 10 years,5 to 10 years,Yes,"KPGA Associate Member, 
+USGTF Teaching Professional",7,Agree
+Sub21,20,Female,160,60,240,Right,Right,3 to 5 years,3 to 5 years,Yes,USGTF Teaching Professional,4,Agree
+Sub22,31,Male,177,77,260,Right,Right,More than 10 years,More than 10 years,Yes,USGTF Teaching Professional,6,Agree
+Sub23,38,Female,176,67,240,Right,Right,More than 10 years,5 to 10 years,Yes,KLPGA Associate Member,7,Agree
+Sub24,35,Female,169,64,245,Right,Right,More than 10 years,1 to 3 years,Yes,USGTF Teaching Professional,4,Agree

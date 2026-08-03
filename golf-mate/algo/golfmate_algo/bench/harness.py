@@ -27,6 +27,8 @@ from golfmate_algo.events.segmental import detect_phases_segmental
 from golfmate_algo.math import so3
 from golfmate_algo.synth.analytic import SyntheticSwing, planar_circular_swing
 from golfmate_algo.synth.imu_model import ImuErrorParams, apply_imu_errors
+from golfmate_algo.synth.multibody import SwingConfig, SwingTruth, build_swing, casting_swing
+from golfmate_algo.synth.violations import ViolationSpec, apply_violations, mild_violation
 from golfmate_algo.traj.dead_reckon import reconstruct_trajectory
 from golfmate_algo.traj.lever_arm import estimate_lever_arm
 
@@ -41,6 +43,10 @@ class SwingCase:
     accel: ArrayF
     t: ArrayF
     error_label: str
+    generator: str = "analytic"
+    assumptions: dict[str, float | bool | str] = field(
+        default_factory=lambda: {"rigid_fixed_center": True}
+    )
 
 
 @dataclass
@@ -142,6 +148,156 @@ def build_cases(
                         accel=a2,
                         t=t2,
                         error_label=ename,
+                        generator="analytic",
+                        assumptions={"rigid_fixed_center": True, "family": "analytic_planar"},
+                    )
+                )
+    return cases
+
+
+def multibody_to_synthetic(truth: SwingTruth) -> SyntheticSwing:
+    """Project multibody ground truth onto the SyntheticSwing scoring contract."""
+    packet = truth.to_imu_packet()
+    ph = truth.phases()
+    omega = np.linalg.norm(truth.gyro_body, axis=1)
+    alpha = np.linalg.norm(truth.seg_alpha_body[truth.config.mount_segment], axis=1)
+    # Approximate swing radius from wrist path span (not used as a hard score
+    # when rigid_fixed_center is False).
+    pos = truth.sensor_pos - truth.sensor_pos[ph.address_idx]
+    radius = float(np.max(np.linalg.norm(pos, axis=1)))
+    return SyntheticSwing(
+        packet=packet,
+        phases_true=ph,
+        quats_true=truth.sensor_quat,
+        positions_true=truth.sensor_pos,
+        velocities_true=truth.sensor_vel,
+        angles=truth.seg_angle_rad[truth.config.mount_segment],
+        omega_scalar=omega,
+        alpha_scalar=alpha,
+        peak_omega_time_s=float(truth.t[int(np.argmax(omega))]),
+        impact_time_s=float(truth.t[ph.impact_idx]),
+        casting=not truth.kinematic_sequence_ok(),
+        meta={
+            "radius_m": radius,
+            "generator": 1.0,
+            "club_head_speed_impact_m_s": float(truth.club_head_speed[ph.impact_idx]),
+        },
+    )
+
+
+def _inject_impact_shock(
+    t: ArrayF,
+    quats: ArrayF,
+    accel: ArrayF,
+    impact_idx: int,
+    *,
+    impact_shock_g: float = 30.0,
+    shock_decay_s: float = 0.012,
+    shock_ring_hz: float = 120.0,
+) -> ArrayF:
+    """Add a broadband strike transient so impact remains physically detectable.
+
+    Multibody kinematics alone are smooth at the impact index; a real club-ball
+    collision injects a short high-frequency specific-force spike. Without it,
+    high-pass impact detectors are graded against an impossible target.
+    """
+    if impact_shock_g <= 0.0:
+        return accel
+    out = accel.copy()
+    g = float(np.linalg.norm(so3.G_WORLD))
+    tau = t - t[impact_idx]
+    ring = np.where(
+        tau >= 0.0,
+        np.exp(-tau / max(shock_decay_s, 1e-4)) * np.sin(2 * np.pi * shock_ring_hz * tau),
+        0.0,
+    )
+    direction = np.array([0.0, 1.0, 0.3], dtype=np.float64)
+    direction /= np.linalg.norm(direction)
+    shock_world = impact_shock_g * g * ring[:, None] * direction[None, :]
+    for i in range(t.shape[0]):
+        out[i] = out[i] + so3.quat_to_rotmat(quats[i]).T @ shock_world[i]
+    return out
+
+
+def build_cases_multibody(
+    *,
+    seeds: Iterable[int] = (0, 1, 2),
+    error_levels: dict[str, Callable[[int], ImuErrorParams]] | None = None,
+    fs_hz: float = 200.0,
+    violate: bool = False,
+    violation_factory: Callable[[int], ViolationSpec] | None = None,
+) -> list[SwingCase]:
+    """Cross-generator cases from the independent multibody oracle.
+
+    When ``violate`` is True, measurements are further corrupted so the rigid
+    lever-arm assumption fails while truth pose/position stay physical.
+    """
+    if error_levels is None:
+        error_levels = {
+            "ideal": lambda s: ImuErrorParams.ideal(),
+            "consumer": lambda s: ImuErrorParams.consumer_grade(seed=s),
+            "harsh": lambda s: ImuErrorParams.harsh(seed=s),
+        }
+    if violation_factory is None:
+        violation_factory = mild_violation
+
+    variants = [
+        ("normal", False, 0.80, 0.25),
+        ("slow", False, 0.95, 0.32),
+        ("fast", False, 0.65, 0.20),
+        ("casting", True, 0.80, 0.27),
+    ]
+    tilts = [45.0, 55.0, 65.0]
+    gen_name = "multibody_violate" if violate else "multibody"
+    cases: list[SwingCase] = []
+
+    for seed in seeds:
+        for vname, casting, bs, ds in variants:
+            tilt = tilts[seed % len(tilts)]
+            cfg = SwingConfig(
+                fs_hz=fs_hz,
+                plane_tilt_deg=tilt,
+                backswing_s=bs,
+                downswing_s=ds,
+                address_s=0.35,
+                followthrough_s=0.50,
+                finish_hold_s=0.20,
+            )
+            truth = casting_swing(cfg) if casting else build_swing(cfg)
+            swing = multibody_to_synthetic(truth)
+            gyro0 = truth.gyro_body.copy()
+            accel0 = _inject_impact_shock(
+                truth.t, truth.sensor_quat, truth.accel_body.copy(), truth.impact_idx
+            )
+            viol_meta: dict[str, float] = {}
+            if violate:
+                gyro0, accel0, viol_meta = apply_violations(
+                    truth.t,
+                    gyro0,
+                    accel0,
+                    quats_true=truth.sensor_quat,
+                    positions_true=truth.sensor_pos,
+                    impact_idx=truth.impact_idx,
+                    spec=violation_factory(seed),
+                )
+            for ename, factory in error_levels.items():
+                t2, g2, a2, _ = apply_imu_errors(truth.t, gyro0, accel0, factory(seed))
+                assumptions: dict[str, float | bool | str] = {
+                    "rigid_fixed_center": not violate,
+                    "family": "multibody",
+                    "violated": violate,
+                }
+                assumptions.update({f"viol_{k}": v for k, v in viol_meta.items()})
+                cases.append(
+                    SwingCase(
+                        label=f"{gen_name}/{vname}/tilt{int(tilt)}/seed{seed}",
+                        swing=swing,
+                        gyro=g2,
+                        accel=a2,
+                        t=t2,
+                        error_label=ename,
+                        generator=gen_name,
+                        assumptions=assumptions,
                     )
                 )
     return cases
@@ -214,13 +370,27 @@ def benchmark_trajectory(cases: list[SwingCase]) -> list[MetricRow]:
         pos_la = la.positions - la.positions[ph.address_idx]
         e_la = np.linalg.norm(pos_la[window] - truth[window], axis=1) * 100.0
         acc.setdefault(("lever_arm", case.error_label), []).extend(e_la.tolist())
-        radius_err.setdefault(case.error_label, []).append(
-            abs(la.radius_m - case.swing.meta["radius_m"]) * 100.0
+        if case.assumptions.get("rigid_fixed_center", True):
+            radius_err.setdefault(case.error_label, []).append(
+                abs(la.radius_m - case.swing.meta["radius_m"]) * 100.0
+            )
+        # Always track residual / validity for violation gates
+        acc.setdefault(("lever_arm_residual_m_s2", case.error_label), []).append(
+            float(la.residual_rms_m_s2)
+        )
+        acc.setdefault(("lever_arm_invalid", case.error_label), []).append(
+            0.0 if la.valid else 1.0
         )
 
     for (alg, cond), vals in sorted(acc.items()):
         m, p, mx, n = _stats(vals)
-        rows.append(MetricRow(alg, cond, "position_cm", m, p, mx, n))
+        if alg.endswith("_residual_m_s2"):
+            metric = "residual_m_s2"
+        elif alg.endswith("_invalid"):
+            metric = "invalid_rate"
+        else:
+            metric = "position_cm"
+        rows.append(MetricRow(alg, cond, metric, m, p, mx, n))
     for cond, vals in sorted(radius_err.items()):
         m, p, mx, n = _stats(vals)
         rows.append(MetricRow("lever_arm", cond, "radius_err_cm", m, p, mx, n))

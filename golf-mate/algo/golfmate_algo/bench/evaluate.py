@@ -1,14 +1,17 @@
-"""End-to-end evaluation runner: Monte-Carlo + ablation + degradation → report.
+"""Zero-trust evaluation runner: dual-track Monte-Carlo + external gate.
 
 Usage
 -----
-    cd golf-mate/algo
-    python -m golfmate_algo.bench.evaluate [--seeds 8] [--quick] [--out DIR]
+    python -m golfmate_algo.bench.evaluate --mode full
+    python -m golfmate_algo.bench.evaluate --mode holdout
+    python -m golfmate_algo.bench.evaluate --quick
 
-Outputs
--------
-* ``benchmark.json`` — machine-readable, CI-regressable
-* ``BENCHMARK.md`` — human report with tables and interpretation
+Tracks
+------
+* isomorphic_analytic — upper bound only (shares rigid-centre assumption)
+* cross_multibody — accurate synthetic numbers (independent generator)
+* violation_stress — assumption-breaking; residual / invalid must rise
+* external_multisense — MultiSenseGolf mocap-derived wrist IMU (when present)
 """
 
 from __future__ import annotations
@@ -16,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,21 +27,26 @@ import numpy as np
 
 from golfmate_algo.ahrs import init as ahrs_init
 from golfmate_algo.ahrs import suite as ahrs_suite
-from golfmate_algo.bench.ablation import (
-    benchmark_degradation,
-    benchmark_gate_ablation,
-    benchmark_gate_ablation_session,
-    benchmark_traj_ablation,
-)
+from golfmate_algo.bench.ablation import benchmark_degradation
+from golfmate_algo.bench.datasets import multisense as msg
+from golfmate_algo.bench.gates import check_gates
 from golfmate_algo.bench.harness import (
     SwingCase,
-    build_cases,
-    format_rows,
     orientation_error_deg,
     _yaw_align,
 )
+from golfmate_algo.bench.protocol import (
+    Mode,
+    PROTOCOL_ID,
+    build_protocol_cases,
+    load_holdout_manifest,
+    protocol_meta,
+    seal_holdout,
+    verify_holdout_inputs,
+)
 from golfmate_algo.bench.stats import Summary, summarize
 from golfmate_algo.events.segmental import detect_phases_segmental
+from golfmate_algo.math import so3
 from golfmate_algo.pipeline import analyze_swing
 from golfmate_algo.synth.imu_model import ImuErrorParams, apply_imu_errors
 from golfmate_algo.synth.session import make_session
@@ -52,16 +59,20 @@ def _sum_dict(s: Summary) -> dict[str, Any]:
     return s.to_dict()
 
 
-# --------------------------------------------------------------------------- core MC
+def _yaw_rotate_positions(pos: Any, q_est: Any, q_true: Any, address_idx: int) -> Any:
+    aligned = _yaw_align(q_est, q_true, address_idx)
+    r = so3.quat_multiply(aligned[address_idx], so3.quat_conjugate(q_est[address_idx]))
+    R = so3.quat_to_rotmat(r)
+    out = (R @ np.asarray(pos, dtype=np.float64).T).T
+    return out - out[address_idx]
 
 
-def _run_orientation_mc(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
-    by_all: dict[tuple[str, str], list[float]] = {}
-    by_down: dict[tuple[str, str], list[float]] = {}
-    # Per-case mean (for bootstrap over swings, not samples)
+# --------------------------------------------------------------------------- track scorers
+
+
+def _score_orientation(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
     case_means: dict[tuple[str, str], list[float]] = {}
     case_means_down: dict[tuple[str, str], list[float]] = {}
-
     for case in cases:
         fs = case.swing.packet.frame.fs_hz
         dt = 1.0 / fs
@@ -74,51 +85,35 @@ def _run_orientation_mc(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
             runs.append((est.name, quats))
         quats_rb, _ = ahrs_suite.GyroOnly().run(case.gyro - bias, case.accel, dt, q0=q0)
         runs.append(("gyro_only+restbias", quats_rb))
-
         for name, quats in runs:
-            aligned = _yaw_align(quats, case.swing.quats_true, ph.address_idx)
-            err = orientation_error_deg(aligned, case.swing.quats_true)
+            n = min(quats.shape[0], case.swing.quats_true.shape[0])
+            aligned = _yaw_align(quats[:n], case.swing.quats_true[:n], ph.address_idx)
+            err = orientation_error_deg(aligned, case.swing.quats_true[:n])
             key = (name, case.error_label)
-            by_all.setdefault(key, []).extend(err.tolist())
-            by_down.setdefault(key, []).extend(err[ph.top_idx : ph.impact_idx + 1].tolist())
             case_means.setdefault(key, []).append(float(np.mean(err)))
-            case_means_down.setdefault(key, []).append(
-                float(np.mean(err[ph.top_idx : ph.impact_idx + 1]))
-            )
+            lo = min(ph.top_idx, n - 1)
+            hi = min(ph.impact_idx + 1, n)
+            case_means_down.setdefault(key, []).append(float(np.mean(err[lo:hi])))
 
-    result: dict[str, Any] = {"sample_pooled": {}, "per_swing": {}}
+    out: dict[str, Any] = {"per_swing": {}}
     for (alg, cond), vals in sorted(case_means.items()):
-        result["per_swing"].setdefault(alg, {})[f"{cond}/all"] = _sum_dict(
+        out["per_swing"].setdefault(alg, {})[f"{cond}/all"] = _sum_dict(
             summarize(vals, n_boot=n_boot, seed=abs(hash((alg, cond))) % 10_000)
         )
-        result["per_swing"][alg][f"{cond}/down"] = _sum_dict(
+        out["per_swing"][alg][f"{cond}/down"] = _sum_dict(
             summarize(
                 case_means_down[(alg, cond)],
                 n_boot=n_boot,
                 seed=abs(hash((alg, cond, "d"))) % 10_000,
             )
         )
-    for (alg, cond), vals in sorted(by_all.items()):
-        # Pooled sample stats for p95/max continuity with prior report
-        s = summarize(vals, n_boot=min(n_boot, 800), seed=1)
-        result["sample_pooled"].setdefault(alg, {})[f"{cond}/all"] = {
-            "mean": s.mean,
-            "p95": s.p95,
-            "maximum": s.maximum,
-            "n": s.n,
-        }
-        sd = summarize(by_down[(alg, cond)], n_boot=min(n_boot, 800), seed=2)
-        result["sample_pooled"][alg][f"{cond}/down"] = {
-            "mean": sd.mean,
-            "p95": sd.p95,
-            "maximum": sd.maximum,
-            "n": sd.n,
-        }
-    return result
+    return out
 
 
-def _run_trajectory_mc(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
+def _score_trajectory(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
     buckets: dict[tuple[str, str], list[float]] = {}
+    residual: dict[str, list[float]] = {}
+    invalid: dict[str, list[float]] = {}
     radius: dict[str, list[float]] = {}
     for case in cases:
         fs = case.swing.packet.frame.fs_hz
@@ -127,41 +122,56 @@ def _run_trajectory_mc(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
         bias, _ = ahrs_init.estimate_gyro_bias(case.gyro, case.accel, fs)
         gyro_c = case.gyro - bias
         quats, _ = ahrs_suite.GatedAdaptive().run(gyro_c, case.accel, dt, q0=q0)
-        quats = _yaw_align(quats, case.swing.quats_true, case.swing.phases_true.address_idx)
+        n = min(quats.shape[0], case.swing.quats_true.shape[0])
+        quats = _yaw_align(quats[:n], case.swing.quats_true[:n], case.swing.phases_true.address_idx)
         ph = case.swing.phases_true
-        truth = case.swing.positions_true - case.swing.positions_true[ph.address_idx]
-        window = slice(ph.address_idx, ph.finish_idx + 1)
+        truth = case.swing.positions_true[:n] - case.swing.positions_true[ph.address_idx]
+        window = slice(ph.address_idx, min(ph.finish_idx + 1, n))
 
-        _, _, pos_dr = reconstruct_trajectory(quats, case.accel, dt, phases=ph)
+        _, _, pos_dr = reconstruct_trajectory(quats, case.accel[:n], dt, phases=ph)
         pos_dr = pos_dr - pos_dr[ph.address_idx]
         e_dr = float(np.mean(np.linalg.norm(pos_dr[window] - truth[window], axis=1) * 100.0))
         buckets.setdefault(("dead_reckon_zupt", case.error_label), []).append(e_dr)
 
-        la = estimate_lever_arm(quats, gyro_c, case.accel, dt)
+        la = estimate_lever_arm(quats, gyro_c[:n], case.accel[:n], dt)
         pos_la = la.positions - la.positions[ph.address_idx]
         e_la = float(np.mean(np.linalg.norm(pos_la[window] - truth[window], axis=1) * 100.0))
         buckets.setdefault(("lever_arm", case.error_label), []).append(e_la)
-        radius.setdefault(case.error_label, []).append(
-            abs(la.radius_m - case.swing.meta["radius_m"]) * 100.0
-        )
+        residual.setdefault(case.error_label, []).append(float(la.residual_rms_m_s2))
+        invalid.setdefault(case.error_label, []).append(0.0 if la.valid else 1.0)
+        if case.assumptions.get("rigid_fixed_center", True):
+            radius.setdefault(case.error_label, []).append(
+                abs(la.radius_m - float(case.swing.meta.get("radius_m", la.radius_m))) * 100.0
+            )
 
-    out: dict[str, Any] = {"position_cm": {}, "radius_err_cm": {}}
+    out: dict[str, Any] = {
+        "position_cm": {},
+        "lever_arm_residual_m_s2": {},
+        "lever_arm_invalid": {},
+        "radius_err_cm": {},
+    }
     for (alg, cond), vals in sorted(buckets.items()):
         out["position_cm"].setdefault(alg, {})[cond] = _sum_dict(
             summarize(vals, n_boot=n_boot, seed=21)
         )
+    for cond, vals in sorted(residual.items()):
+        out["lever_arm_residual_m_s2"][cond] = _sum_dict(
+            summarize(vals, n_boot=n_boot, seed=22)
+        )
+    for cond, vals in sorted(invalid.items()):
+        out["lever_arm_invalid"][cond] = _sum_dict(summarize(vals, n_boot=n_boot, seed=23))
     for cond, vals in sorted(radius.items()):
-        out["radius_err_cm"][cond] = _sum_dict(summarize(vals, n_boot=n_boot, seed=22))
+        out["radius_err_cm"][cond] = _sum_dict(summarize(vals, n_boot=n_boot, seed=24))
     return out
 
 
-def _run_events_mc(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
+def _score_events(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
     buckets: dict[tuple[str, str], list[float]] = {}
     failures: dict[str, int] = {}
     for case in cases:
         fs = case.swing.packet.frame.fs_hz
         try:
-            det = detect_phases_segmental(case.swing.packet.t, case.gyro, case.accel)
+            det = detect_phases_segmental(case.t, case.gyro, case.accel)
         except Exception:
             failures[case.error_label] = failures.get(case.error_label, 0) + 1
             continue
@@ -169,14 +179,86 @@ def _run_events_mc(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
         for name in ("address", "top", "impact", "finish"):
             err_ms = abs(getattr(det, f"{name}_idx") - getattr(tr, f"{name}_idx")) / fs * 1000.0
             buckets.setdefault((name, case.error_label), []).append(err_ms)
-
     out: dict[str, Any] = {}
     for (name, cond), vals in sorted(buckets.items()):
-        s = summarize(vals, n_boot=n_boot, seed=30)
-        d = _sum_dict(s)
+        d = _sum_dict(summarize(vals, n_boot=n_boot, seed=30))
         d["failures"] = float(failures.get(cond, 0))
         out.setdefault(name, {})[cond] = d
     return out
+
+
+def _score_e2e(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
+    ori: dict[str, list[float]] = {}
+    impact: dict[str, list[float]] = {}
+    pos: dict[str, list[float]] = {}
+    fallback: dict[str, list[float]] = {}
+    fails: dict[str, int] = {}
+    for case in cases:
+        fs = case.swing.packet.frame.fs_hz
+        packet = ImuPacket(
+            frame=SensorFrame(fs_hz=fs),
+            t=case.t,
+            gyro=case.gyro,
+            accel=case.accel,
+        )
+        try:
+            report = analyze_swing(packet)
+        except Exception:
+            fails[case.error_label] = fails.get(case.error_label, 0) + 1
+            continue
+        ph = case.swing.phases_true
+        addr = min(ph.address_idx, report.quats.shape[0] - 1)
+        n = min(report.quats.shape[0], case.swing.quats_true.shape[0])
+        aligned = _yaw_align(report.quats[:n], case.swing.quats_true[:n], addr)
+        ori.setdefault(case.error_label, []).append(
+            float(np.mean(orientation_error_deg(aligned, case.swing.quats_true[:n])))
+        )
+        impact.setdefault(case.error_label, []).append(
+            abs(report.phases.impact_idx - ph.impact_idx) / fs * 1000.0
+        )
+        truth = case.swing.positions_true[:n] - case.swing.positions_true[ph.address_idx]
+        window = slice(ph.address_idx, min(ph.finish_idx + 1, n))
+        pos_e = _yaw_rotate_positions(
+            report.positions[:n], report.quats[:n], case.swing.quats_true[:n], addr
+        )
+        pos.setdefault(case.error_label, []).append(
+            float(np.mean(np.linalg.norm(pos_e[window] - truth[window], axis=1) * 100.0))
+        )
+        fallback.setdefault(case.error_label, []).append(
+            float(report.meta.get("fallback", 0.0))
+        )
+    out: dict[str, Any] = {}
+    for cond in sorted(set(ori) | set(impact) | set(pos)):
+        out[cond] = {
+            "orientation_deg": _sum_dict(summarize(ori.get(cond, []), n_boot=n_boot, seed=50)),
+            "impact_ms": _sum_dict(summarize(impact.get(cond, []), n_boot=n_boot, seed=51)),
+            "position_cm": _sum_dict(summarize(pos.get(cond, []), n_boot=n_boot, seed=52)),
+            "fallback_rate": _sum_dict(summarize(fallback.get(cond, []), n_boot=n_boot, seed=53)),
+            "pipeline_failures": fails.get(cond, 0),
+        }
+    return out
+
+
+def _score_track(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
+    if not cases:
+        return {"empty": True}
+    return {
+        "n_cases": len(cases),
+        "generator": cases[0].generator,
+        "orientation": _score_orientation(cases, n_boot),
+        "trajectory": _score_trajectory(cases, n_boot),
+        "events": _score_events(cases, n_boot),
+        "e2e": _score_e2e(cases, n_boot),
+        "credibility": (
+            "upper_bound_isomorphic"
+            if cases[0].generator == "analytic"
+            else (
+                "assumption_stress"
+                if "violate" in cases[0].generator
+                else "cross_generator_accurate"
+            )
+        ),
+    }
 
 
 def _run_session_mc(seeds: list[int], n_boot: int) -> dict[str, Any]:
@@ -204,325 +286,259 @@ def _run_session_mc(seeds: list[int], n_boot: int) -> dict[str, Any]:
                 aligned = _yaw_align(quats, session.quats_true, 0)
                 err = float(np.mean(orientation_error_deg(aligned, session.quats_true)))
                 buckets.setdefault((name, lname), []).append(err)
-
     out: dict[str, Any] = {}
     for (alg, cond), vals in sorted(buckets.items()):
         out.setdefault(alg, {})[cond] = _sum_dict(summarize(vals, n_boot=n_boot, seed=40))
     return out
 
 
-def _yaw_rotate_positions(pos: Any, q_est: Any, q_true: Any, address_idx: int) -> Any:
-    """Apply the same unobservable-yaw correction used for orientation metrics.
-
-    Six-axis filters leave heading free; without rotating the reconstructed path
-    by that constant world-Z offset, Euclidean position error is dominated by
-    an unobservable gauge and is not informative.
-    """
-    from golfmate_algo.math import so3
-
-    aligned = _yaw_align(q_est, q_true, address_idx)
-    # Relative world rotation that maps the raw estimate into the aligned frame.
-    r = so3.quat_multiply(aligned[address_idx], so3.quat_conjugate(q_est[address_idx]))
-    R = so3.quat_to_rotmat(r)
-    out = (R @ np.asarray(pos, dtype=np.float64).T).T
-    return out - out[address_idx]
-
-
-def _run_e2e(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
-    """Full pipeline against truth: orientation + impact timing + position."""
-    ori: dict[str, list[float]] = {}
-    impact: dict[str, list[float]] = {}
-    pos: dict[str, list[float]] = {}
-    fails: dict[str, int] = {}
-
-    for case in cases:
-        fs = case.swing.packet.frame.fs_hz
-        packet = ImuPacket(
-            frame=SensorFrame(fs_hz=fs),
-            t=case.t,
-            gyro=case.gyro,
-            accel=case.accel,
-        )
-        try:
-            report = analyze_swing(packet)
-        except Exception:
-            fails[case.error_label] = fails.get(case.error_label, 0) + 1
-            continue
-        ph = case.swing.phases_true
-        addr = min(ph.address_idx, report.quats.shape[0] - 1)
-        aligned = _yaw_align(report.quats, case.swing.quats_true, addr)
-        ori.setdefault(case.error_label, []).append(
-            float(np.mean(orientation_error_deg(aligned, case.swing.quats_true)))
-        )
-        impact.setdefault(case.error_label, []).append(
-            abs(report.phases.impact_idx - ph.impact_idx) / fs * 1000.0
-        )
-        truth = case.swing.positions_true - case.swing.positions_true[ph.address_idx]
-        window = slice(ph.address_idx, ph.finish_idx + 1)
-        pos_e = _yaw_rotate_positions(
-            report.positions, report.quats, case.swing.quats_true, addr
-        )
-        n = min(pos_e.shape[0], truth.shape[0])
-        w = slice(window.start, min(window.stop, n))
-        pos.setdefault(case.error_label, []).append(
-            float(np.mean(np.linalg.norm(pos_e[w] - truth[w], axis=1) * 100.0))
-        )
-
-    out: dict[str, Any] = {}
-    for cond in sorted(set(ori) | set(impact) | set(pos)):
-        out[cond] = {
-            "orientation_deg": _sum_dict(summarize(ori.get(cond, []), n_boot=n_boot, seed=50)),
-            "impact_ms": _sum_dict(summarize(impact.get(cond, []), n_boot=n_boot, seed=51)),
-            "position_cm": _sum_dict(summarize(pos.get(cond, []), n_boot=n_boot, seed=52)),
-            "pipeline_failures": fails.get(cond, 0),
+def _score_multisense(n_boot: int, max_swings: int = 30) -> dict[str, Any]:
+    st = msg.dataset_status()
+    if not st["ready"]:
+        return {
+            "status": "unavailable",
+            "reason": "documentation or extracted HDF5 swings missing; "
+            "run scripts/fetch_multisense.py",
+            "dataset": st,
         }
-    return out
+    ori: list[float] = []
+    impact: list[float] = []
+    pos: list[float] = []
+    fails = 0
+    n = 0
+    for case in msg.iter_local_swings(max_swings=max_swings):
+        n += 1
+        try:
+            report = analyze_swing(case.packet)
+        except Exception:
+            fails += 1
+            continue
+        fs = case.packet.frame.fs_hz
+        impact.append(abs(report.phases.impact_idx - case.impact_idx) / fs * 1000.0)
+        # orientation vs mocap joint
+        nq = min(report.quats.shape[0], case.quats_ref.shape[0])
+        aligned = _yaw_align(report.quats[:nq], case.quats_ref[:nq], 0)
+        ori.append(float(np.mean(orientation_error_deg(aligned, case.quats_ref[:nq]))))
+        # position
+        np_ = min(report.positions.shape[0], case.positions_ref.shape[0])
+        truth = case.positions_ref[:np_] - case.positions_ref[0]
+        pos_e = _yaw_rotate_positions(
+            report.positions[:np_], report.quats[:np_], case.quats_ref[:np_], 0
+        )
+        pos.append(float(np.mean(np.linalg.norm(pos_e - truth, axis=1) * 100.0)))
+
+    if n == 0:
+        return {"status": "unavailable", "reason": "no swings loaded", "dataset": st}
+
+    return {
+        "status": "ok",
+        "provenance": "multisense_mocap_derived_imu",
+        "doi": msg.DOI,
+        "n_swings": n,
+        "pipeline_failures": fails,
+        "dataset": st,
+        "orientation_deg": _sum_dict(summarize(ori, n_boot=n_boot, seed=60)),
+        "impact_ms": _sum_dict(summarize(impact, n_boot=n_boot, seed=61)),
+        "position_cm": _sum_dict(summarize(pos, n_boot=n_boot, seed=62)),
+        "events": {"impact": _sum_dict(summarize(impact, n_boot=n_boot, seed=61))},
+        "credibility": "external_real_motion_mocap_derived_imu",
+        "caveat": (
+            "Input IMU is derived from mocap joint kinematics (PN 21-bone), not a "
+            "raw wrist MEMS stream. Motion distribution is external; sensor noise is not."
+        ),
+    }
 
 
 # --------------------------------------------------------------------------- report
 
 
-def _fmt(s: dict[str, Any] | None, key: str = "mean") -> str:
-    if not s or key not in s or s[key] is None:
-        return "—"
-    v = s[key]
-    if not np.isfinite(v):
-        return "—"
-    return f"{v:.2f}"
-
-
 def _fmt_ci(s: dict[str, Any] | None) -> str:
-    if not s:
+    if not s or "mean" not in s:
         return "—"
-    return f"{s['mean']:.2f} [{s['ci95_lo']:.2f}, {s['ci95_hi']:.2f}]"
+    return f"{s['mean']:.2f} [{s.get('ci95_lo', float('nan')):.2f}, {s.get('ci95_hi', float('nan')):.2f}]"
 
 
-def render_markdown(payload: dict[str, Any]) -> str:
+def render_zero_trust_markdown(payload: dict[str, Any]) -> str:
     meta = payload["meta"]
+    by = payload["by_track"]
+    gates = payload["gates"]
     lines: list[str] = []
-    lines.append("# Golf Mate 算法仿真 Benchmark 报告")
+    lines.append("# Golf Mate 零信任 Benchmark 报告")
     lines.append("")
     lines.append(
-        f"> 生成时间 `{meta['generated_at']}` · 耗时 `{meta['elapsed_s']:.1f}s` · "
-        f"seeds={meta['n_seeds']} · cases/level≈{meta['n_cases_per_level']} · "
-        f"bootstrap={meta['n_boot']}"
+        f"> protocol `{meta.get('protocol_id', PROTOCOL_ID)}` · mode `{meta.get('mode')}` · "
+        f"`{meta['generated_at']}` · {meta['elapsed_s']:.1f}s · "
+        f"gates **{'PASS' if gates.get('pass') else 'FAIL'}**"
     )
     lines.append("")
-    lines.append("## 0. 评测方法（现代仿真方案）")
+    lines.append("## 可信度分层（必读）")
     lines.append("")
-    lines.append("| 要素 | 设计 |")
-    lines.append("|------|------|")
-    lines.append("| 真值 | 高斯基解析角速度驱动的倾斜平面圆周挥杆；姿态/位置/加速度闭式一致 |")
-    lines.append("| 传感器 | 完整 MEMS 误差链：ARW/VRW、零偏+RW、标度/非正交/失准、g 敏感、饱和、量化、安装谐振、抖动、丢包 |")
-    lines.append("| 分层 | `ideal` / `consumer`（BMI270 级）/ `harsh`（松散安装+饱和+丢包） |")
-    lines.append("| 场景 | 单杆（4 变体 × 3 倾角 × seeds）+ 多杆会话（8 杆 / ~24 s） |")
-    lines.append("| 公平性 | 6 轴不可观测 yaw → 全局 chordal 均值投影到世界 Z 后对齐再比 |")
-    lines.append("| 统计 | **按挥杆均值**聚合 + **百分位 bootstrap 95% CI**（非仅样本池化） |")
-    lines.append("| 消融 | 门控项（α / ω / rest）与轨迹方法（杠杆解 / ZUPT / 姿态 oracle） |")
-    lines.append("| 退化 | 消费级误差幅度 ×{0,0.5,1,1.5,2,3} 的连续曲线 |")
-    lines.append("| E2E | `analyze_swing` 整条管线；位置在不可观测 yaw 对齐后再比（否则被 gauge 支配） |")
+    lines.append("| 轨道 | 含义 | 可否对外产品精度引用 |")
+    lines.append("|------|------|-------------------|")
+    lines.append("| isomorphic_analytic | 与杠杆解同构的解析平面 | **否**（上界） |")
+    lines.append("| cross_multibody | 独立多刚体生成器 | **可**（准确仿真） |")
+    lines.append("| violation_stress | 故意破坏刚性假设 | 测诚实度，非精度 |")
+    lines.append("| external_multisense | MultiSenseGolf 真人运动 | **可**（零信任运动分布） |")
     lines.append("")
 
-    # Headline
-    e2e = payload["e2e"]
-    lines.append("## 1. 头条指标（端到端管线）")
+    if gates.get("violations"):
+        lines.append("### 闸门失败")
+        for v in gates["violations"]:
+            lines.append(f"- {v}")
+        lines.append("")
+    if gates.get("notes"):
+        lines.append("### 闸门备注")
+        for n in gates["notes"]:
+            lines.append(f"- {n}")
+        lines.append("")
+
+    # Headline from cross_multibody consumer e2e
+    cross = by.get("cross_multibody", {})
+    e2e = cross.get("e2e", {})
+    lines.append("## 1. 准确仿真头条（cross_multibody / E2E）")
     lines.append("")
-    lines.append("| 条件 | 姿态 ° mean [CI] | Impact ms | 位置 cm | 失败 |")
-    lines.append("|------|----------------:|----------:|--------:|-----:|")
-    for cond, row in e2e.items():
+    lines.append("| 条件 | 姿态 ° | Impact ms | 位置 cm | fallback |")
+    lines.append("|------|-------:|----------:|--------:|---------:|")
+    for cond in ("ideal", "consumer", "harsh"):
+        row = e2e.get(cond)
+        if not row:
+            continue
         lines.append(
-            f"| {cond} | {_fmt_ci(row['orientation_deg'])} | "
-            f"{_fmt_ci(row['impact_ms'])} | {_fmt_ci(row['position_cm'])} | "
-            f"{row['pipeline_failures']} |"
+            f"| {cond} | {_fmt_ci(row['orientation_deg'])} | {_fmt_ci(row['impact_ms'])} | "
+            f"{_fmt_ci(row['position_cm'])} | {_fmt_ci(row.get('fallback_rate'))} |"
         )
     lines.append("")
 
-    # Orientation table
-    ori = payload["orientation"]["per_swing"]
-    lines.append("## 2. 姿态估计对抗（按挥杆均值 °）")
-    lines.append("")
-    lines.append("### 2.1 全时段")
-    lines.append("")
-    algs = sorted(ori.keys())
-    lines.append("| 算法 | ideal | consumer | harsh |")
-    lines.append("|------|------:|---------:|------:|")
-    for alg in algs:
-        cells = []
-        for cond in ("ideal", "consumer", "harsh"):
-            cells.append(_fmt_ci(ori[alg].get(f"{cond}/all")))
-        lines.append(f"| {alg} | " + " | ".join(cells) + " |")
-    lines.append("")
-    lines.append("### 2.2 下杆窗口 Top→Impact")
-    lines.append("")
-    lines.append("| 算法 | ideal | consumer | harsh |")
-    lines.append("|------|------:|---------:|------:|")
-    for alg in algs:
-        cells = []
-        for cond in ("ideal", "consumer", "harsh"):
-            cells.append(_fmt_ci(ori[alg].get(f"{cond}/down")))
-        lines.append(f"| {alg} | " + " | ".join(cells) + " |")
-    lines.append("")
+    # Orientation leaders on cross track
+    ori = cross.get("orientation", {}).get("per_swing", {})
+    if ori:
+        lines.append("## 2. 姿态对抗（cross_multibody，按挥杆均值 °）")
+        lines.append("")
+        lines.append("| 算法 | ideal | consumer | harsh |")
+        lines.append("|------|------:|---------:|------:|")
+        for alg in sorted(ori.keys()):
+            cells = [_fmt_ci(ori[alg].get(f"{c}/all")) for c in ("ideal", "consumer", "harsh")]
+            lines.append(f"| {alg} | " + " | ".join(cells) + " |")
+        lines.append("")
 
-    sess = payload["session"]
-    lines.append("### 2.3 多杆会话（~24 s，按会话均值 °）")
-    lines.append("")
-    lines.append("| 算法 | consumer | harsh |")
-    lines.append("|------|---------:|------:|")
-    for alg in sorted(sess.keys()):
-        lines.append(
-            f"| {alg} | {_fmt_ci(sess[alg].get('consumer'))} | {_fmt_ci(sess[alg].get('harsh'))} |"
-        )
-    lines.append("")
+    sess = payload.get("session", {})
+    if sess:
+        lines.append("## 3. 会话漂移（analytic session，~24 s）")
+        lines.append("")
+        lines.append("| 算法 | consumer | harsh |")
+        lines.append("|------|---------:|------:|")
+        for alg in sorted(sess.keys()):
+            lines.append(
+                f"| {alg} | {_fmt_ci(sess[alg].get('consumer'))} | {_fmt_ci(sess[alg].get('harsh'))} |"
+            )
+        lines.append("")
 
-    # Trajectory
-    traj = payload["trajectory"]
-    lines.append("## 3. 轨迹重建（位置误差 cm）")
+    # Events
+    ev = cross.get("events", {})
+    if ev:
+        lines.append("## 4. 事件检测（cross_multibody，ms）")
+        lines.append("")
+        lines.append("| 事件 | ideal | consumer | harsh |")
+        lines.append("|------|------:|---------:|------:|")
+        for name in ("address", "top", "impact", "finish"):
+            cells = [_fmt_ci(ev.get(name, {}).get(c)) for c in ("ideal", "consumer", "harsh")]
+            lines.append(f"| {name} | " + " | ".join(cells) + " |")
+        lines.append("")
+
+    # Trajectory + violation
+    traj = cross.get("trajectory", {})
+    viol = by.get("violation_stress", {})
+    lines.append("## 5. 轨迹与打假")
     lines.append("")
-    lines.append("| 方法 | ideal | consumer | harsh |")
-    lines.append("|------|------:|---------:|------:|")
-    for alg in sorted(traj["position_cm"].keys()):
+    lines.append("| 方法 / 指标 | ideal | consumer | harsh |")
+    lines.append("|-------------|------:|---------:|------:|")
+    for alg in sorted(traj.get("position_cm", {}).keys()):
         cells = [
             _fmt_ci(traj["position_cm"][alg].get(c)) for c in ("ideal", "consumer", "harsh")
         ]
-        lines.append(f"| {alg} | " + " | ".join(cells) + " |")
-    lines.append("")
-    lines.append("半径误差 cm：")
-    for cond, s in traj["radius_err_cm"].items():
-        lines.append(f"- `{cond}`: {_fmt_ci(s)}")
-    lines.append("")
-
-    # Events
-    ev = payload["events"]
-    lines.append("## 4. 事件检测（|error| ms）")
-    lines.append("")
-    lines.append("| 事件 | ideal | consumer | harsh |")
-    lines.append("|------|------:|---------:|------:|")
-    for name in ("address", "top", "impact", "finish"):
-        cells = [_fmt_ci(ev.get(name, {}).get(c)) for c in ("ideal", "consumer", "harsh")]
-        lines.append(f"| {name} | " + " | ".join(cells) + " |")
-    lines.append("")
-
-    # Ablation
-    abl = payload["ablation_gate"]
-    lines.append("## 5. 消融：动力学门控")
-    lines.append("")
-    lines.append("### 5.1 单杆 consumer（全时段 / 下杆）")
-    lines.append("")
-    lines.append("| 变体 | all ° | down ° |")
-    lines.append("|------|------:|-------:|")
-    for alg in sorted(abl.keys()):
-        lines.append(
-            f"| {alg} | {_fmt_ci(abl[alg].get('consumer/all'))} | "
-            f"{_fmt_ci(abl[alg].get('consumer/down'))} |"
-        )
-    lines.append("")
-    abl_s = payload["ablation_gate_session"]
-    lines.append("### 5.2 会话 consumer / harsh")
-    lines.append("")
-    lines.append("| 变体 | session/consumer | session/harsh |")
-    lines.append("|------|-----------------:|--------------:|")
-    for alg in sorted(abl_s.keys()):
-        lines.append(
-            f"| {alg} | {_fmt_ci(abl_s[alg].get('session/consumer'))} | "
-            f"{_fmt_ci(abl_s[alg].get('session/harsh'))} |"
-        )
-    lines.append("")
+        lines.append(f"| {alg} cm | " + " | ".join(cells) + " |")
+    for cond in ("ideal", "consumer", "harsh"):
+        pass
     lines.append(
-        "**读法**：`full_gate+rest` 是产品配置；`no_alpha` 去掉角加速度项；"
-        "`always_open` 全程信加速度；`gyro_only` 关闭倾角修正。"
-        "单杆上 `always_open` 是灾难（下杆 ~48°）；"
-        "`a_only`/`no_alpha`/`full_gate` 的 CI 重叠——短窗内门控细节差别小于种子方差，"
-        "会话尺度上 `gyro_only` 崩到 60°+ 而门控族稳定在 ~6°。"
+        "| residual clean | "
+        + " | ".join(
+            _fmt_ci(traj.get("lever_arm_residual_m_s2", {}).get(c))
+            for c in ("ideal", "consumer", "harsh")
+        )
+        + " |"
+    )
+    vtraj = viol.get("trajectory", {})
+    lines.append(
+        "| residual violate | "
+        + " | ".join(
+            _fmt_ci(vtraj.get("lever_arm_residual_m_s2", {}).get(c))
+            for c in ("ideal", "consumer", "harsh")
+        )
+        + " |"
+    )
+    lines.append(
+        "| invalid rate violate | "
+        + " | ".join(
+            _fmt_ci(vtraj.get("lever_arm_invalid", {}).get(c))
+            for c in ("ideal", "consumer", "harsh")
+        )
+        + " |"
     )
     lines.append("")
 
-    abl_t = payload["ablation_traj"]
-    lines.append("## 6. 消融：轨迹方法")
+    # Isomorphic disclaimer
+    iso = by.get("isomorphic_analytic", {})
+    if iso.get("e2e"):
+        lines.append("## 6. 同构上界（不可单独引用为产品精度）")
+        lines.append("")
+        lines.append("| 条件 | 姿态 ° | Impact ms | 位置 cm |")
+        lines.append("|------|-------:|----------:|--------:|")
+        for cond, row in iso["e2e"].items():
+            lines.append(
+                f"| {cond} | {_fmt_ci(row['orientation_deg'])} | "
+                f"{_fmt_ci(row['impact_ms'])} | {_fmt_ci(row['position_cm'])} |"
+            )
+        lines.append("")
+
+    ext = by.get("external_multisense", {})
+    lines.append("## 7. 外部零信任（MultiSenseGolf）")
     lines.append("")
-    lines.append("| 方法 | ideal | consumer | harsh |")
-    lines.append("|------|------:|---------:|------:|")
-    for alg in sorted(abl_t.keys()):
-        cells = [_fmt_ci(abl_t[alg].get(c)) for c in ("ideal", "consumer", "harsh")]
-        lines.append(f"| {alg} | " + " | ".join(cells) + " |")
-    lines.append("")
-    lines.append(
-        "`lever_arm_oracle_R` 用真值姿态，隔离 AHRS 误差；与 `lever_arm` 的差距即姿态误差传导。"
-    )
+    if ext.get("status") != "ok":
+        lines.append(f"状态：**unavailable** — {ext.get('reason', 'n/a')}")
+    else:
+        lines.append(
+            f"状态：**ok** · n={ext.get('n_swings')} · doi:`{ext.get('doi')}` · "
+            f"{ext.get('caveat', '')}"
+        )
+        lines.append("")
+        lines.append("| 指标 | mean [CI] |")
+        lines.append("|------|----------:|")
+        lines.append(f"| 姿态 ° | {_fmt_ci(ext.get('orientation_deg'))} |")
+        lines.append(f"| Impact ms | {_fmt_ci(ext.get('impact_ms'))} |")
+        lines.append(f"| 位置 cm | {_fmt_ci(ext.get('position_cm'))} |")
     lines.append("")
 
-    deg = payload["degradation"]
-    lines.append("## 7. 退化曲线（误差幅度 × scale）")
-    lines.append("")
-    lines.append("### 7.1 单杆")
-    lines.append("")
-    lines.append("| scale | gated ° [CI] | gyro_only ° [CI] |")
-    lines.append("|------:|-------------:|-----------------:|")
-    for row in deg["single_swing"]:
-        lines.append(
-            f"| {row['scale']:.1f} | {row['gated_mean']:.2f} "
-            f"[{row['gated_ci_lo']:.2f}, {row['gated_ci_hi']:.2f}] | "
-            f"{row['gyro_only_mean']:.2f} "
-            f"[{row['gyro_only_ci_lo']:.2f}, {row['gyro_only_ci_hi']:.2f}] |"
-        )
-    lines.append("")
-    lines.append("### 7.2 会话")
-    lines.append("")
-    lines.append("| scale | gated ° [CI] | gyro_only ° [CI] |")
-    lines.append("|------:|-------------:|-----------------:|")
-    for row in deg["session"]:
-        lines.append(
-            f"| {row['scale']:.1f} | {row['gated_mean']:.2f} "
-            f"[{row['gated_ci_lo']:.2f}, {row['gated_ci_hi']:.2f}] | "
-            f"{row['gyro_only_mean']:.2f} "
-            f"[{row['gyro_only_ci_lo']:.2f}, {row['gyro_only_ci_hi']:.2f}] |"
-        )
-    lines.append("")
+    deg = payload.get("degradation", {})
+    if deg.get("session"):
+        lines.append("## 8. 退化曲线（会话，gated vs gyro_only）")
+        lines.append("")
+        lines.append("| scale | gated ° | gyro_only ° |")
+        lines.append("|------:|--------:|------------:|")
+        for row in deg["session"]:
+            lines.append(
+                f"| {row['scale']:.1f} | {row['gated_mean']:.2f} | {row['gyro_only_mean']:.2f} |"
+            )
+        lines.append("")
 
-    lines.append("## 8. 结论（由本次数据支撑）")
-    lines.append("")
-    # Auto-extract winners
-    try:
-        cons = {
-            a: ori[a]["consumer/all"]["mean"]
-            for a in ori
-            if "consumer/all" in ori[a]
-        }
-        win = min(cons, key=cons.get)
-        lines.append(
-            f"1. **单杆姿态**：consumer 下按挥杆均值最优为 `{win}` "
-            f"({cons[win]:.2f}°)。短窗内纯积分仍极强；产品选型以会话尺度为准。"
-        )
-        sc = {a: sess[a]["consumer"]["mean"] for a in sess if "consumer" in sess[a]}
-        win_s = min(sc, key=sc.get)
-        go = sc.get("gyro_only", float("nan"))
-        lines.append(
-            f"2. **会话姿态**：consumer 最优 `{win_s}` ({sc[win_s]:.2f}°)；"
-            f"gyro_only={go:.2f}° —— 门控在长窗上把漂移压到可交付区间。"
-        )
-        la = traj["position_cm"]["lever_arm"]["consumer"]["mean"]
-        dr = traj["position_cm"]["dead_reckon_zupt"]["consumer"]["mean"]
-        lines.append(
-            f"3. **轨迹**：consumer 杠杆解 {la:.2f} cm vs ZUPT {dr:.2f} cm "
-            f"（约 {dr / max(la, 1e-9):.1f}×）。"
-        )
-        imp = ev["impact"]["consumer"]["mean"]
-        lines.append(f"4. **击球时刻**：consumer Impact MAE {imp:.2f} ms（物理高通锚定，无训练）。")
-    except Exception as exc:  # pragma: no cover
-        lines.append(f"_自动结论生成失败: {exc}_")
-    lines.append("")
     lines.append("## 9. 复现")
     lines.append("")
     lines.append("```bash")
-    lines.append("cd golf-mate/algo")
-    lines.append("source .venv/bin/activate")
-    lines.append("python -m golfmate_algo.bench.evaluate --seeds 8")
+    lines.append("cd golf-mate/algo && source .venv/bin/activate")
+    lines.append("python scripts/fetch_multisense.py --max-swings 30")
+    lines.append("python scripts/seal_holdout.py")
+    lines.append("python -m golfmate_algo.bench.evaluate --mode full")
     lines.append("pytest -q")
     lines.append("```")
-    lines.append("")
-    lines.append(
-        "机器可读结果见同目录 `benchmark.json`。"
-        "对抗回归锁在 `tests/test_adversarial.py`。"
-    )
     lines.append("")
     return "\n".join(lines)
 
@@ -541,111 +557,145 @@ def _json_ready(obj: Any) -> Any:
 
 def run_evaluation(
     *,
-    seeds: list[int],
+    mode: Mode = "dev",
     n_boot: int = 2000,
     quick: bool = False,
+    generators: list[str] | None = None,
+    include_multisense: bool = True,
+    include_degradation: bool = True,
+    n_dev: int | None = None,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     if quick:
-        seeds = seeds[:2]
+        mode = "dev"
         n_boot = min(n_boot, 400)
+        n_dev = n_dev or 2
+        include_degradation = False
+    gens = generators or ["analytic", "multibody", "multibody_violate"]
+    tracks = build_protocol_cases(mode=mode if mode != "full" else "dev", generators=gens, n_dev=n_dev)
+    # full mode also scores holdout seeds separately for seal check
+    holdout_info: dict[str, Any] = {"enabled": False}
+    if mode in ("holdout", "full"):
+        try:
+            sealed = load_holdout_manifest()
+        except FileNotFoundError:
+            seal_holdout()
+            sealed = load_holdout_manifest()
+        hold_tracks = build_protocol_cases(
+            mode="holdout",
+            generators=[g for g in gens if g != "multibody_violate"],
+        )
+        mismatches = verify_holdout_inputs(hold_tracks)
+        holdout_info = {
+            "enabled": True,
+            "artifact_sha256": sealed.get("artifact_sha256"),
+            "mismatches": mismatches,
+            "n_cases": {k: len(v) for k, v in hold_tracks.items()},
+        }
+        if mode == "holdout":
+            tracks = hold_tracks
 
-    cases = build_cases(seeds=seeds)
-    n_per = sum(1 for c in cases if c.error_label == "consumer")
+    by_track: dict[str, Any] = {}
+    for name, cases in tracks.items():
+        # quick: consumer-only to save time
+        if quick:
+            cases = [c for c in cases if c.error_label == "consumer"]
+        by_track[name] = _score_track(cases, n_boot)
 
-    orientation = _run_orientation_mc(cases, n_boot)
-    trajectory = _run_trajectory_mc(cases, n_boot)
-    events = _run_events_mc(cases, n_boot)
-    session = _run_session_mc(seeds if not quick else seeds[:2], n_boot)
-    e2e = _run_e2e(cases, n_boot)
+    if include_multisense:
+        by_track["external_multisense"] = _score_multisense(
+            n_boot, max_swings=10 if quick else 30
+        )
+    else:
+        by_track["external_multisense"] = {
+            "status": "skipped",
+            "reason": "include_multisense=False",
+        }
 
-    abl_gate = benchmark_gate_ablation(cases, n_boot=n_boot)
-    abl_sess = benchmark_gate_ablation_session(
-        seeds=seeds if not quick else seeds[:2], n_boot=n_boot
-    )
-    abl_traj = benchmark_traj_ablation(cases, n_boot=n_boot)
-    degradation = benchmark_degradation(
-        seeds=seeds if not quick else seeds[:3],
-        n_boot=min(n_boot, 800),
-        scales=[0.0, 0.5, 1.0, 2.0] if quick else None,
+    session_seeds = list(range(n_dev or 8))[: (2 if quick else 8)]
+    session = _run_session_mc(session_seeds, n_boot)
+    degradation = (
+        benchmark_degradation(
+            seeds=session_seeds[:5],
+            n_boot=min(n_boot, 800),
+            scales=[0.0, 1.0, 2.0] if quick else None,
+        )
+        if include_degradation
+        else {}
     )
 
     elapsed = time.perf_counter() - t0
-    payload = {
+    pmeta = protocol_meta(
+        mode,
+        gens,
+        sealed=holdout_info.get("enabled", False),
+        artifact_sha256=holdout_info.get("artifact_sha256"),
+    )
+    payload: dict[str, Any] = {
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": elapsed,
-            "n_seeds": len(seeds),
-            "seeds": seeds,
-            "n_cases_total": len(cases),
-            "n_cases_per_level": n_per,
+            "mode": mode,
+            "protocol_id": pmeta.protocol_id,
+            "generators": list(gens),
             "n_boot": n_boot,
             "quick": quick,
+            "disclaimer_isomorphic_upper_bound": True,
             "fs_hz": 200.0,
-            "protocol": "analytic-planar + MEMS error model + yaw-align + bootstrap CI",
         },
-        "e2e": e2e,
-        "orientation": orientation,
-        "trajectory": trajectory,
-        "events": events,
+        "by_track": by_track,
         "session": session,
-        "ablation_gate": {k: {kk: _sum_dict(vv) for kk, vv in v.items()} for k, v in abl_gate.items()},
-        "ablation_gate_session": {
-            k: {kk: _sum_dict(vv) for kk, vv in v.items()} for k, v in abl_sess.items()
-        },
-        "ablation_traj": {
-            k: {kk: _sum_dict(vv) for kk, vv in v.items()} for k, v in abl_traj.items()
-        },
         "degradation": degradation,
+        "holdout": holdout_info,
+        "gates": {},
     }
+    payload["gates"] = check_gates(payload)
     return _json_ready(payload)
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Golf Mate algorithm simulation benchmark")
-    p.add_argument("--seeds", type=int, default=8, help="number of Monte-Carlo seeds")
-    p.add_argument("--boot", type=int, default=2000, help="bootstrap resamples")
-    p.add_argument("--quick", action="store_true", help="fast smoke evaluation")
-    p.add_argument(
-        "--out",
-        type=str,
-        default="",
-        help="output directory (default: docs/research/ + artifacts)",
-    )
+    p = argparse.ArgumentParser(description="Golf Mate zero-trust benchmark")
+    p.add_argument("--mode", choices=["dev", "holdout", "full"], default="full")
+    p.add_argument("--boot", type=int, default=2000)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--out", type=str, default="")
+    p.add_argument("--no-multisense", action="store_true")
     args = p.parse_args(argv)
 
-    seeds = list(range(args.seeds))
-    payload = run_evaluation(seeds=seeds, n_boot=args.boot, quick=args.quick)
-    md = render_markdown(payload)
+    payload = run_evaluation(
+        mode=args.mode,  # type: ignore[arg-type]
+        n_boot=args.boot,
+        quick=args.quick,
+        include_multisense=not args.no_multisense,
+    )
+    md = render_zero_trust_markdown(payload)
 
     algo_root = Path(__file__).resolve().parents[2]
-    repo_docs = algo_root.parent / "docs" / "research"
-    default_out = algo_root / "bench_out"
-    out_dir = Path(args.out) if args.out else default_out
+    out_dir = Path(args.out) if args.out else algo_root / "bench_out"
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "benchmark_zero_trust.json").write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
+    (out_dir / "BENCHMARK_ZERO_TRUST.md").write_text(md, encoding="utf-8")
 
-    json_path = out_dir / "benchmark.json"
-    md_path = out_dir / "BENCHMARK.md"
-    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    md_path.write_text(md, encoding="utf-8")
-
-    # Also publish into research docs
-    if repo_docs.is_dir():
-        (repo_docs / "05_benchmark_report.md").write_text(md, encoding="utf-8")
-        (repo_docs / "benchmark.json").write_text(
+    docs = algo_root.parent / "docs" / "research"
+    if docs.is_dir():
+        (docs / "06_zero_trust_benchmark.md").write_text(md, encoding="utf-8")
+        (docs / "benchmark_zero_trust.json").write_text(
             json.dumps(payload, indent=2), encoding="utf-8"
         )
 
-    # Artifacts for the agent walkthrough
     art = Path("/opt/cursor/artifacts")
     if art.is_dir():
-        art.mkdir(parents=True, exist_ok=True)
-        (art / "BENCHMARK.md").write_text(md, encoding="utf-8")
-        (art / "benchmark.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        (art / "BENCHMARK_ZERO_TRUST.md").write_text(md, encoding="utf-8")
+        (art / "benchmark_zero_trust.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
 
     print(md)
-    print(f"\nWrote {json_path} and {md_path}")
-    return 0
+    print(f"\nWrote {out_dir / 'BENCHMARK_ZERO_TRUST.md'}")
+    print(f"gates.pass = {payload['gates']['pass']}")
+    return 0 if payload["gates"]["pass"] else 1
 
 
 if __name__ == "__main__":  # pragma: no cover

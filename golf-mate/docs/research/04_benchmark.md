@@ -1,13 +1,26 @@
 # 算法对抗验证结果：与行业/文献最佳实践对标
 
-> **完整仿真报告（含 bootstrap CI / 消融 / 退化曲线）**：[05_benchmark_report.md](./05_benchmark_report.md)  
-> 机器可读：[`benchmark.json`](./benchmark.json)  
-> 复现：`cd golf-mate/algo && python -m golfmate_algo.bench.evaluate --seeds 8`  
-> 回归锁定：`pytest tests/test_adversarial.py tests/test_evaluate.py`
+> **零信任准确 benchmark（主报告）**：[06_zero_trust_benchmark.md](./06_zero_trust_benchmark.md) · [`benchmark_zero_trust.json`](./benchmark_zero_trust.json)  
+> 同构仿真上界（不可单独引用为产品精度）：[05_benchmark_report.md](./05_benchmark_report.md)  
+> 复现：`python -m golfmate_algo.bench.evaluate --mode full`  
+> 回归：`pytest tests/test_adversarial.py tests/test_zero_trust.py tests/test_evaluate.py`
 
-本次正式评测：`seeds=8` · `96` cases（每误差等级 32）· bootstrap `2000` · 耗时 ~7 min。
+**引用规则：** 对外精度数字只用 `cross_multibody` / `external_multisense`；`isomorphic_analytic` 仅作上界。
 
-## 1. 现代仿真评测方法
+## 准确仿真头条（cross_multibody E2E，consumer）
+
+| 指标 | mean [95% CI] |
+|------|---------------|
+| 姿态 | **2.54°** [1.93, 3.66] |
+| Impact | **5.62 ms** [4.84, 6.41] |
+| 腕部位置 | **23.7 cm** [22.4, 25.2]（诚实异构；同构上界约 5 cm） |
+| 会话姿态 (~24s) | **5.87°** vs gyro-only ~52° |
+
+MultiSenseGolf（mocap-derived IMU，n=30）：姿态 ~45°、位置 ~46 cm；Impact 因无真实击球冲击不可硬闸。详见 06。
+
+---
+
+## 附录：同构评测方法（历史 / 上界）
 
 | 要素 | 做法 |
 |------|------|

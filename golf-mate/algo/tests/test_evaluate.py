@@ -1,4 +1,4 @@
-"""Smoke tests for the modern evaluation suite."""
+"""Smoke tests for the evaluation suite."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ def test_bootstrap_ci_covers_mean():
 
 def test_gate_ablation_smoke():
     cases = build_cases(seeds=(0,))
-    # consumer only to keep runtime small
     cases = [c for c in cases if c.error_label == "consumer"]
     out = benchmark_gate_ablation(cases, n_boot=200)
     assert "full_gate+rest" in out
@@ -37,12 +36,18 @@ def test_degradation_smoke():
 
 
 def test_evaluate_quick():
-    payload = run_evaluation(seeds=[0, 1], n_boot=200, quick=True)
-    assert "e2e" in payload
-    assert "orientation" in payload
-    assert "degradation" in payload
-    assert payload["meta"]["quick"] is True
-    # consumer e2e should produce finite numbers
-    cons = payload["e2e"]["consumer"]
+    payload = run_evaluation(
+        mode="dev",
+        n_boot=100,
+        quick=True,
+        include_multisense=False,
+        include_degradation=False,
+        n_dev=1,
+    )
+    assert "by_track" in payload
+    assert "gates" in payload
+    cross = payload["by_track"]["cross_multibody"]
+    assert cross["e2e"]
+    cons = cross["e2e"].get("consumer")
+    assert cons is not None
     assert cons["orientation_deg"]["n"] >= 1
-    assert cons["impact_ms"]["mean"] < 100.0

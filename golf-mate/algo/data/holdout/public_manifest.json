@@ -1,0 +1,24 @@
+{
+  "protocol_id": "golfmate-zt-v1",
+  "seeds": [
+    1000,
+    1001,
+    1002,
+    1003,
+    1004,
+    1005,
+    1006,
+    1007
+  ],
+  "artifact_sha256": "10ee52d4b2c45ff8c4b4837cf6e52fd950ad42e648912758291f116b4242dfba",
+  "tracks": {
+    "isomorphic_analytic": {
+      "n_cases": 32,
+      "inputs_sha256": "f1ed073b73d060a84c61bf2cb71d9629e8f3f08d5f494ee1db2303669cf3b9e0"
+    },
+    "cross_multibody": {
+      "n_cases": 32,
+      "inputs_sha256": "56fd33d4766145637d972680942fe5447c66193d080925ee5d85e7dc06e50f7f"
+    }
+  }
+}

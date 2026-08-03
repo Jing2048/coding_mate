@@ -1,0 +1,97 @@
+﻿Participant Number,Sensor Name,Comfort Rating Scale - Emotion,Comfort Rating Scale -Attachment,Comfort Rating Scale - Harm,Comfort Rating Scale - Perceived Change,Comfort Rating Scale - Movement,Comfort Rating Scale - Anxiety,Sensor Discomfort Feedback
+Sub01,Perception Neruon Studio,5,4.5,1,4.5,4,1,"The straps caused clothing to twist and ride up, which felt uncomfortable."
+Sub01,"Insole-Type 
+Pressure Sensor",1,2,1,3,3.5,1,"The insole surface felt slippery, reducing comfort."
+Sub01,Pupil Invisible,4,5.5,1,5,4,1,"The glasses shifted slightly during movement, which was distracting."
+Sub02,Perception Neruon Studio,5,4,2.5,5.5,5.5,1,Heat buildup combined with strap pressure made it feel increasingly stuffy and restrictive.
+Sub02,"Insole-Type 
+Pressure Sensor",3.5,6.5,1,4.5,6,1,"The shoe size felt slightly too large, causing discomfort."
+Sub02,Pupil Invisible,1.5,3,1.5,1,3.5,1,"There was no notable discomfort, but the participant felt slight unfamiliarity."
+Sub03,Perception Neruon Studio,3.5,5.5,1,2,2.5,1,There was no notable discomfort.
+Sub03,"Insole-Type 
+Pressure Sensor",3.5,6,1,6,6,1,"The shoe fit felt too large and the foot tended to slide, creating instability."
+Sub03,Pupil Invisible,2.5,5,1,5,2,1,The nose pads kept sliding down and felt unfamiliar because the participant does not usually wear glasses.
+Sub04,Perception Neruon Studio,2.5,5,2,5.5,5,2,The hand strap interfered with the grip and made proper swings difficult.
+Sub04,"Insole-Type 
+Pressure Sensor",2.5,2.5,3,5.5,5.5,2,"The insole material felt slippery, making balance control harder."
+Sub04,Pupil Invisible,2,5,2,5,5,2,The frame thickness and weight felt different from usual and seemed to slide down during swings.
+Sub05,Perception Neruon Studio,4.5,3.5,1,2,6,2,"Overall discomfort was small, but the hand strap strongly interfered with the grip."
+Sub05,"Insole-Type 
+Pressure Sensor",2.5,4.5,1,2.5,5,2,"The insole felt uneven and not well cushioned, and exposed wiring caused concern about breakage."
+Sub05,Pupil Invisible,2,5,1,2,3,3,There was no notable discomfort.
+Sub06,Perception Neruon Studio,1.5,3,1,5,4,1,"The hand strap felt intrusive on the grip, and the arm straps tended to slip down during fast swings."
+Sub06,"Insole-Type 
+Pressure Sensor",1,6.5,1,7,6.5,1,"The insole was slippery and the shoe felt slightly large, sometimes slipping off and disrupting balance."
+Sub06,Pupil Invisible,1,1,1,1,1,1,There was no notable discomfort because the participant is accustomed to wearing glasses.
+Sub07,Perception Neruon Studio,2,3,1,2.5,1,1,"The head area felt slightly tight, but the overall impact was limited."
+Sub07,"Insole-Type 
+Pressure Sensor",1,1,1,1,1,1,There was no notable discomfort.
+Sub07,Pupil Invisible,1,3,1,4.5,1.5,1,"Sweat reduced visibility and the glasses kept slipping down, which was distracting."
+Sub08,Perception Neruon Studio,1,1,1,2,1,1,There was no notable discomfort.
+Sub08,"Insole-Type 
+Pressure Sensor",1,1,1,2,2,1,"The sole felt slippery, making lower body fixation difficult."
+Sub08,Pupil Invisible,2,3,1,3,3,1,"The cable was not well secured, so the glasses kept shaking and demanded attention."
+Sub09,Perception Neruon Studio,1,1.5,1,1,1,1,Sensor sagging or slipping was distracting during movement.
+Sub09,"Insole-Type 
+Pressure Sensor",1,5.5,1,2,2,1,"The shoe fit did not match well, making weight transfer during swings harder."
+Sub09,Pupil Invisible,1,1,1,1,1,1,There was no notable discomfort.
+Sub10,Perception Neruon Studio,4,4,1.5,4,5.5,2,The hand strap pressure was strong and repeatedly interfered with the grip.
+Sub10,"Insole-Type 
+Pressure Sensor",1,1,1,1.5,1,1,There was no notable discomfort.
+Sub10,Pupil Invisible,3.5,4,2,4.5,4,1,It may feel unfamiliar for people who do not typically wear glasses.
+Sub11,Perception Neruon Studio,3,2,1,2,2,1,There was no notable discomfort.
+Sub11,"Insole-Type 
+Pressure Sensor",2,2,1,2,2,2,There was no notable discomfort.
+Sub11,Pupil Invisible,4,4,3.5,3,3,3,"Because the participant rarely wears glasses, they felt it sliding down and partially blocking view during backswing."
+Sub12,Perception Neruon Studio,2,5,1.5,2,4,3,There was no notable discomfort.
+Sub12,"Insole-Type 
+Pressure Sensor",2,4.5,1.5,3,2,2,There was no notable discomfort.
+Sub12,Pupil Invisible,2,6.5,1.5,6,5,2,There was no notable discomfort.
+Sub13,Perception Neruon Studio,4.5,4,2.5,3,4,4,"Wearing sensors over golf clothing felt unnatural, like not wearing their own outfit."
+Sub13,"Insole-Type 
+Pressure Sensor",4,4,1.5,4,2.5,2,"The size did not fit perfectly, but discomfort was limited because the swing is mostly stationary."
+Sub13,Pupil Invisible,4.5,3.5,1,2,5,1,It felt awkward for a non glasses wearer and was perceived as distracting in a precision focused swing.
+Sub14,Perception Neruon Studio,2.5,2,1,3.5,4.5,1,There was no notable discomfort.
+Sub14,"Insole-Type 
+Pressure Sensor",4,7,1,7,6.5,4,Size mismatch and slipperiness reduced lower body fixation and required extra attention.
+Sub14,Pupil Invisible,1,3,1,4,1,1,The retention strap was more uncomfortable than the glasses themselves.
+Sub15,Perception Neruon Studio,4,3.5,3,5,4,4,There was no notable discomfort.
+Sub15,"Insole-Type 
+Pressure Sensor",5,5,2.5,5,6,4,"The insole was very slippery, making it difficult to maintain balance."
+Sub15,Pupil Invisible,2,3,1.5,1,1,2,There was no notable discomfort and it felt similar to wearing sunglasses on the course.
+Sub16,Perception Neruon Studio,2,3,1,4,1,1,The straps felt firm but did not significantly hinder body rotation.
+Sub16,"Insole-Type 
+Pressure Sensor",4,7,3.5,6,5,4,The shoe and insole did not hold the foot well during weight transfer and felt slippery.
+Sub16,Pupil Invisible,3,5,1.5,6,1.5,1,The participant does not usually wear glasses and felt discomfort due to slight visual obstruction.
+Sub17,Perception Neruon Studio,1,5,1,1,1,1,There was no notable discomfort.
+Sub17,"Insole-Type 
+Pressure Sensor",3,3,3,1,5,1,"The insole felt slippery and poorly matched, repeatedly breaking balance especially near the finish position."
+Sub17,Pupil Invisible,1,1,1,1,1,1,The glasses were uncomfortable due to incorrect prescription.
+Sub18,Perception Neruon Studio,1.5,3.5,1,1.5,2.5,1,There was no notable discomfort.
+Sub18,"Insole-Type 
+Pressure Sensor",1,4.5,4.5,3.5,6.5,1,The underfoot setup caused strong discomfort near the little toe for a wide forefoot and slipperiness reduced left foot stability.
+Sub18,Pupil Invisible,1,2,1,2,1,1,There was no notable discomfort.
+Sub19,Perception Neruon Studio,1,2,1,4,6,1,"The hand strap interfered with the grip, while other tightness felt unusual but tolerable."
+Sub19,"Insole-Type 
+Pressure Sensor",1,2,1,2,5,1,The slippery material affected backswing rotation and felt unstable.
+Sub19,Pupil Invisible,1,4,1,1.5,1,1,It was not strongly uncomfortable but felt unfamiliar and the frame partially blocked the ball during backswing.
+Sub20,Perception Neruon Studio,2.5,1.5,1,2,2.5,1,It was not painful but felt like the body was wrapped or constrained.
+Sub20,"Insole-Type 
+Pressure Sensor",2,3,1,2.5,2,1,The insole felt the most unfamiliar among the sensors.
+Sub20,Pupil Invisible,1.5,1.5,1,1,1,1,There was no notable discomfort because the participant routinely wears glasses.
+Sub21,Perception Neruon Studio,1.5,3.5,1,3.5,4,1,There was psychological concern that the sensors might fall off during the swing.
+Sub21,"Insole-Type 
+Pressure Sensor",1,6.5,1,6,6,1,Size mismatch and slipperiness made the center of mass drift backward at impact.
+Sub21,Pupil Invisible,1,6,1,6.5,1.5,1,The participant was not used to glasses and slipping plus a changed field of view felt distracting.
+Sub22,Perception Neruon Studio,1.5,2.5,1,2,2.5,1,The arm straps tended to slip down in high movement areas.
+Sub22,"Insole-Type 
+Pressure Sensor",2.5,1.5,1,2.5,2.5,1,Slipperiness made it hard to control pressure distribution especially for golfers who actively use lower body.
+Sub22,Pupil Invisible,1,2,1,1.5,2,1,The glasses slipped down when the head dipped at impact and tighter non slip sports sunglasses were suggested.
+Sub23,Perception Neruon Studio,3,2.5,1,2.5,2.5,2,Attachment and detachment felt cumbersome and annoying.
+Sub23,"Insole-Type 
+Pressure Sensor",3,5.5,6.5,6.5,7,7,The slippery feel required extra stabilization and caused ankle discomfort.
+Sub23,Pupil Invisible,1,2,1,2,2.5,1,There was no notable discomfort.
+Sub24,Perception Neruon Studio,3.5,6.5,2,7,7,1,The straps caused mild foreign body sensation but were not severely uncomfortable.
+Sub24,"Insole-Type 
+Pressure Sensor",4,7,2.5,7,5,1,There was no notable discomfort.
+Sub24,Pupil Invisible,7,7,4,7,7,5,"The glasses shook and the frame blocked view significantly, which felt like it reduced overall movement flexibility."

@@ -17,10 +17,12 @@ dependencies = [
 
 [project.optional-dependencies]
 ahrs = ["vqf>=2.0.0"]
+data = ["h5py>=3.10"]
 dev = [
   "pytest>=8.0",
   "hypothesis>=6.100",
   "vqf>=2.0.0",
+  "h5py>=3.10",
 ]
 
 [tool.setuptools.packages.find]

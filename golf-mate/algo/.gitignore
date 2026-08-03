@@ -4,3 +4,11 @@ bench_out/
 .venv/
 *.egg-info/
 __pycache__/
+data/multisense/*.zip
+data/multisense/Sub*/
+data/holdout/*_truth.json
+data/holdout/*_inputs.json
+data/holdout/manifest.json
+!data/holdout/public_manifest.json
+!data/multisense/docs/
+!data/multisense/README.md
