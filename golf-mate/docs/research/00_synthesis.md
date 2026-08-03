@@ -40,20 +40,28 @@
 ### P0（本轮必交付，可严格 UT）
 
 - 硬件无关 `ImuPacket` / `SensorFrame`
+- **`devices.normalize_packet`**：安装外参 + 左右手/腕侧 → canonical lead-right 解剖系
+- Watch / 手套卡 **规格契约**（无 Swift；假数据工厂供 UT）
 - GolfGatedAHRS（门控 + 姿态序列）
 - 相位事件检测
-- 腕轨迹重建（ZUPT + plane）
+- 腕轨迹重建（hybrid / ZUPT + plane）
 - 特征：tempo、rhythm、peak ω、平面角、closure 代理、手速代理
-- 可解释诊断规则（casting、过陡 transition 等代理）
+- 可解释诊断规则 + **理想运动学参考带**（分位数代理，非唯一正确姿势）
+- **`export.SwingFeatureVector`**（Core ML 可导出契约，本轮无 `.mlmodel`）
 - `SwingReport` 稳定 schema
-- pytest + hypothesis 全绿
+- pytest 全绿
 
 ### P1（接口预留）
 
 - 单腕 → 全身运动学映射（WIT-KinNet / Lauer 路线）
-- MultiSenseGolf 回归闸门
+- MultiSenseGolf 回归闸门（含 **elite 高水平子集** 评测轨）
 - imucal Ferraris 离线标定流水线
-- Watch / 手套卡 adapter
+- Watch / 手套卡 **真机 adapter 实现**（Swift / BLE）
+- Core ML 模型训练与转换（消费同一 feature contract）
+
+### Canonical Frame（多设备解耦）
+
+客户端只填设备安装系 IMU，并如实设置 `handedness` / `wrist` / `mount_extrinsic`。`normalize_packet` 负责外参、左右镜像与幂等 `is_canonical` 标记；其后算法一律在右打领先腕解剖系下运行。
 
 ### P2（接口预留）
 
