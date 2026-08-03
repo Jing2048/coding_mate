@@ -71,8 +71,9 @@ def crop_lite_correct(
     *,
     address_idx: int | None = None,
     finish_idx: int | None = None,
-    bound_gyro_rad_s: float = 0.05,  # ~3 deg/s
-    bound_accel_m_s2: float = 0.25,
+    bound_gyro_rad_s: float = 0.03,  # ~1.7 deg/s
+    bound_accel_m_s2: float = 0.15,
+    min_improvement: float = 0.05,
 ) -> CropLiteResult:
     """Estimate and remove constant residual biases using rest constraints."""
     g = np.asarray(gyro, dtype=np.float64).reshape(-1, 3)
@@ -109,11 +110,37 @@ def crop_lite_correct(
         return c_a + 40.0 * c_w + 0.5 * c_dir + 2.0 * c_level
 
     x0 = np.zeros(6, dtype=np.float64)
+    cost0 = float(cost(x0))
+    # Skip optimization when rest gyro is already quiet and |a|≈g
+    rest_w = float(np.mean(np.linalg.norm(g_r, axis=1)))
+    rest_a_err = float(np.mean(np.abs(np.linalg.norm(a_r, axis=1) - G_NORM)))
+    if rest_w < 0.04 and rest_a_err < 0.08:
+        return CropLiteResult(
+            gyro_corr=g.copy(),
+            accel_corr=a.copy(),
+            delta_gyro=np.zeros(3),
+            delta_accel=np.zeros(3),
+            rest_fraction=rest_frac,
+            cost=cost0,
+            success=True,
+        )
+
     bounds = [(-bound_gyro_rad_s, bound_gyro_rad_s)] * 3 + [
         (-bound_accel_m_s2, bound_accel_m_s2)
     ] * 3
     res = minimize(cost, x0, method="L-BFGS-B", bounds=bounds)
     dg, da = res.x[:3], res.x[3:]
+    improved = bool(res.success) and (cost0 - float(res.fun)) >= min_improvement
+    if not improved:
+        return CropLiteResult(
+            gyro_corr=g.copy(),
+            accel_corr=a.copy(),
+            delta_gyro=np.zeros(3),
+            delta_accel=np.zeros(3),
+            rest_fraction=rest_frac,
+            cost=cost0,
+            success=False,
+        )
     return CropLiteResult(
         gyro_corr=g - dg,
         accel_corr=a - da,
@@ -121,5 +148,5 @@ def crop_lite_correct(
         delta_accel=da.astype(np.float64),
         rest_fraction=rest_frac,
         cost=float(res.fun),
-        success=bool(res.success),
+        success=True,
     )

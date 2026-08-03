@@ -38,8 +38,8 @@ def test_dual_path_keeps_raw_accel_for_events():
 def test_crop_lite_reduces_rest_gyro():
     syn = planar_circular_swing()
     ph = syn.phases_true
-    # Inject a small constant gyro bias
-    gyro_b = syn.packet.gyro + np.array([0.02, -0.01, 0.015])
+    # Inject a clear constant gyro bias (above CROP quiet-rest skip)
+    gyro_b = syn.packet.gyro + np.array([0.08, -0.05, 0.04])
     out = crop_lite_correct(
         gyro_b,
         syn.packet.accel,

@@ -74,7 +74,7 @@ def split_dual_path(
     fs: float,
     *,
     log_scale: float = 9.80665,
-    apply_sta: bool = True,
+    apply_sta: bool = False,
     sta_f0_hz: float = 18.0,
     sta_zeta: float = 0.35,
     sta_gain: float = 0.05,

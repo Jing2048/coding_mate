@@ -247,23 +247,48 @@ def estimate_hybrid_trajectory(
             pos_c = constrained.positions - constrained.positions[addr]
             # Match absolute level at address
             pos_c = pos_c + pos[addr]
-            w_cstr = float(constrained_blend)
-            if resid_rms >= 12.0:
-                w_cstr = float(np.clip(constrained_blend + 0.15, 0.0, 0.6))
-            pos = (1.0 - w_cstr) * pos + w_cstr * pos_c
-            vel = np.gradient(pos, dt, axis=0)
+            # Sanity: reject constrained if it explodes vs lever path length
+            span_l = float(np.max(np.linalg.norm(pos - pos[addr], axis=1))) + 1e-6
+            span_c = float(np.max(np.linalg.norm(pos_c - pos_c[addr], axis=1)))
+            # Reject constrained only when the rigid lever path has collapsed
+            # (typical of bad external AHRS) while the ZUPT path explodes.
+            lever_collapsed = span_l < 0.25 and float(rigid.radius_m) < 0.30
+            if (lever_collapsed and span_c > 1.5) or span_c > 12.0:
+                w_cstr = 0.0
+            else:
+                w_cstr = float(constrained_blend)
+                if resid_rms >= 12.0:
+                    w_cstr = float(np.clip(constrained_blend + 0.15, 0.0, 0.6))
+                pos = (1.0 - w_cstr) * pos + w_cstr * pos_c
+                vel = np.gradient(pos, dt, axis=0)
         except (ValueError, np.linalg.LinAlgError):
             w_cstr = 0.0
 
         # D: soft plane / circle closure
         lo, hi = addr, min(n, fin + 1)
-        if hi - lo >= 8 and plane_blend > 0:
+        if hi - lo >= 8 and plane_blend > 0 and w_cstr > 0:
             try:
                 pos, plane_rms, circ_rms = _plane_circle_blend(pos, lo, hi, plane_blend)
                 vel = np.gradient(pos, dt, axis=0)
                 apply_plane = True
             except (ValueError, np.linalg.LinAlgError):
                 pass
+
+        span_hy = float(np.max(np.linalg.norm(pos - pos[addr], axis=1)))
+        if span_hy > 12.0:
+            pos = pos_rel + center0
+            vel = vel_kin.copy()
+            c_extra = np.zeros((n, 3), dtype=np.float64)
+            w_cstr = 0.0
+            n_harm_used = 0
+            apply_plane = False
+            plane_rms = 0.0
+            circ_rms = 0.0
+            fallback = 1.0
+        else:
+            fallback = 0.0
+    else:
+        fallback = 0.0
 
     w_lever = 1.0 - w_cstr
     valid = bool(rank >= 2 and resid_rms < max_residual_m_s2)
@@ -280,7 +305,7 @@ def estimate_hybrid_trajectory(
         plane_residual_rms=float(plane_rms),
         circle_residual_rms=float(circ_rms),
         center_harmonics=int(n_harm_used),
-        fallback=0.0,
+        fallback=float(fallback),
         meta={
             "center_var": float(c_var),
             "center_var_threshold": float(center_var_threshold),

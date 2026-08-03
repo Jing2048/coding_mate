@@ -65,6 +65,7 @@ def analyze_swing(
         if dual is not None:
             from golfmate_algo.signal.dynamic_range import signed_log_compress
 
+            # Keep dual-path meta / diagnostics; AHRS still compresses once internally.
             accel_ahrs = signed_log_compress(accel_raw)
         else:
             accel_ahrs = accel_raw
@@ -79,9 +80,10 @@ def analyze_swing(
     q0, addr_window, init_quality = ahrs_init.estimate_address_orientation(
         gyro_work, accel_raw, fs, use_signed_log=True
     )
-    # AHRS: integrate raw/corrected gyro; tilt uses signed-log path internally too
+    # AHRS: integrate corrected gyro; tilt uses signed-log once inside the filter
+    # (do not pre-compress accel_ahrs here — that would double-compress).
     quats, ahrs_diag = GatedAdaptive(use_signed_log_tilt=True).run(
-        gyro_work, accel_ahrs, dt, q0=q0
+        gyro_work, accel_raw, dt, q0=q0
     )
     gyro_bias = (
         ahrs_diag["bias"][-1] if len(ahrs_diag.get("bias", [])) else np.zeros(3)
@@ -163,6 +165,9 @@ def analyze_swing(
             },
             "fs_hz": fs,
             "dual_path": dual.meta if dual is not None else {},
+            "accel_ahrs_precompressed": float(
+                dual is not None and not np.allclose(accel_ahrs, accel_raw)
+            ),
             **crop_meta,
             **traj_meta,
         },
