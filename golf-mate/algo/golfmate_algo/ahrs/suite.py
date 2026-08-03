@@ -491,6 +491,8 @@ class GatedAdaptive(_EstimatorBase):
         rest_accel_tol_g: float = 0.06,
         rest_gyro_thresh: float = 0.25,
         gate: DynamicsGate | None = None,
+        use_signed_log_tilt: bool = True,
+        signed_log_scale: float = 9.80665,
     ) -> None:
         super().__init__()
         self.tilt_gain = float(tilt_gain)
@@ -498,6 +500,8 @@ class GatedAdaptive(_EstimatorBase):
         self.rest_accel_tol_g = float(rest_accel_tol_g)
         self.rest_gyro_thresh = float(rest_gyro_thresh)
         self.gate = gate or DynamicsGate()
+        self.use_signed_log_tilt = bool(use_signed_log_tilt)
+        self.signed_log_scale = float(signed_log_scale)
         self.bias = np.zeros(3, dtype=np.float64)
         self._prev_gyro: ArrayF | None = None
         self.gate_history: list[float] = []
@@ -515,6 +519,8 @@ class GatedAdaptive(_EstimatorBase):
         self.rest_history = []
 
     def update(self, gyro: ArrayLike, accel: ArrayLike, dt: float) -> ArrayF:
+        from golfmate_algo.signal.dynamic_range import signed_log_compress
+
         gyro_v, accel_v, dt_s = _as_vec3(gyro), _as_vec3(accel), _safe_dt(dt)
         a_norm = float(np.linalg.norm(accel_v))
         w_norm = float(np.linalg.norm(gyro_v))
@@ -531,12 +537,16 @@ class GatedAdaptive(_EstimatorBase):
             self.bias += (1.0 - float(np.exp(-dt_s / self.bias_tau_s))) * (gyro_v - self.bias)
 
         q_pred = so3.integrate_gyro_rk4(self.q, gyro_v - self.bias, dt_s)
-        # Tilt correction requires both the smooth dynamics gate and a hard rest
-        # confirmation, so the filter can never be worse than pure integration
-        # during the swing while still bounding drift across the record.
+        # Gate / rest from raw dynamics; tilt correction may use signed-log accel
+        # so impact spikes do not yank the gravity reference.
         gate = self.gate(w_norm, a_norm, alpha_norm) if rest else 0.0
         alpha = 1.0 - float(np.exp(-max(self.tilt_gain, 0.0) * gate * dt_s))
-        self.q = _apply_world_tilt_correction(q_pred, accel_v, alpha)
+        accel_tilt = (
+            signed_log_compress(accel_v, scale=self.signed_log_scale)
+            if self.use_signed_log_tilt
+            else accel_v
+        )
+        self.q = _apply_world_tilt_correction(q_pred, accel_tilt, alpha)
 
         self.gate_history.append(gate)
         self.bias_history.append(self.bias.copy())

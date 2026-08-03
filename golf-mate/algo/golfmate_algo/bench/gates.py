@@ -24,7 +24,7 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
     notes: list[str] = []
     by = payload.get("by_track", {})
 
-    # --- cross multibody: impact timing budget (consumer) ---
+    # --- cross multibody: impact timing + E2E position budget (consumer) ---
     cross = by.get("cross_multibody", {})
     impact = _mean(cross, "events", "impact", "consumer")
     if impact is not None and impact > 40.0:
@@ -33,6 +33,17 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
         )
     elif impact is not None:
         notes.append(f"cross_multibody impact MAE {impact:.2f} ms (budget 40)")
+
+    # SciRep-aligned consumer position budget on citeable synthetic track
+    e2e_pos = _mean(cross, "e2e", "consumer", "position_cm")
+    if e2e_pos is None:
+        e2e_pos = _mean(cross, "trajectory", "position_cm", "hybrid", "consumer")
+    if e2e_pos is not None and e2e_pos > 18.0:
+        violations.append(
+            f"cross_multibody position MAE {e2e_pos:.1f} cm exceeds 18 cm consumer budget"
+        )
+    elif e2e_pos is not None:
+        notes.append(f"cross_multibody position MAE {e2e_pos:.2f} cm (budget 18)")
 
     # --- session: gated must crush gyro_only on analytic or multibody session ---
     session = payload.get("session", {})

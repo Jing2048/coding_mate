@@ -64,6 +64,7 @@ def test_gates_detect_missing_rise():
         "by_track": {
             "cross_multibody": {
                 "events": {"impact": {"consumer": {"mean": 10.0}}},
+                "e2e": {"consumer": {"position_cm": {"mean": 12.0}}},
                 "trajectory": {
                     "lever_arm_residual_m_s2": {"consumer": {"mean": 5.0}},
                     "lever_arm_invalid": {"consumer": {"mean": 0.0}},
@@ -87,6 +88,37 @@ def test_gates_detect_missing_rise():
     g = check_gates(payload)
     assert g["pass"] is False
     assert any("residual" in v for v in g["violations"])
+
+
+def test_gates_detect_position_budget():
+    payload = {
+        "by_track": {
+            "cross_multibody": {
+                "events": {"impact": {"consumer": {"mean": 10.0}}},
+                "e2e": {"consumer": {"position_cm": {"mean": 22.0}}},
+                "trajectory": {
+                    "lever_arm_residual_m_s2": {"consumer": {"mean": 5.0}},
+                    "lever_arm_invalid": {"consumer": {"mean": 0.0}},
+                },
+            },
+            "violation_stress": {
+                "trajectory": {
+                    "lever_arm_residual_m_s2": {"consumer": {"mean": 10.0}},
+                    "lever_arm_invalid": {"consumer": {"mean": 0.0}},
+                },
+            },
+            "external_multisense": {"status": "unavailable", "reason": "test"},
+        },
+        "session": {
+            "gated_adaptive": {"consumer": {"mean": 6.0}},
+            "gyro_only": {"consumer": {"mean": 50.0}},
+        },
+        "meta": {"disclaimer_isomorphic_upper_bound": True},
+        "holdout": {"enabled": False},
+    }
+    g = check_gates(payload)
+    assert g["pass"] is False
+    assert any("18 cm" in v for v in g["violations"])
 
 
 def test_evaluate_quick_dual_track():

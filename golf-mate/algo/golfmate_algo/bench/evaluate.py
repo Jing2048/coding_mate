@@ -51,6 +51,7 @@ from golfmate_algo.pipeline import analyze_swing
 from golfmate_algo.synth.imu_model import ImuErrorParams, apply_imu_errors
 from golfmate_algo.synth.session import make_session
 from golfmate_algo.traj.dead_reckon import reconstruct_trajectory
+from golfmate_algo.traj.hybrid import estimate_hybrid_trajectory
 from golfmate_algo.traj.lever_arm import estimate_lever_arm
 from golfmate_algo.types import ImuPacket, SensorFrame
 
@@ -143,6 +144,13 @@ def _score_trajectory(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
             radius.setdefault(case.error_label, []).append(
                 abs(la.radius_m - float(case.swing.meta.get("radius_m", la.radius_m))) * 100.0
             )
+
+        hy = estimate_hybrid_trajectory(
+            quats, gyro_c[:n], case.accel[:n], dt, ph
+        )
+        pos_hy = hy.positions - hy.positions[ph.address_idx]
+        e_hy = float(np.mean(np.linalg.norm(pos_hy[window] - truth[window], axis=1) * 100.0))
+        buckets.setdefault(("hybrid", case.error_label), []).append(e_hy)
 
     out: dict[str, Any] = {
         "position_cm": {},

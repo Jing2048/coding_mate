@@ -122,6 +122,8 @@ def estimate_address_orientation(
     accel: ArrayLike,
     fs: float,
     window_s: float = 0.2,
+    *,
+    use_signed_log: bool = True,
 ) -> tuple[ArrayF, slice, dict[str, Any]]:
     """Estimate the address quaternion from the quietest quasi-static window.
 
@@ -130,6 +132,8 @@ def estimate_address_orientation(
     up, which leaves yaw at zero in the address frame. Downstream metrics are
     therefore reported relative to address, not to an absolute heading.
     """
+    from golfmate_algo.signal.dynamic_range import signed_log_compress
+
     gyros = _as_samples(gyro, 3)
     accels = _as_samples(accel, 3)
     n = gyros.shape[0]
@@ -160,7 +164,12 @@ def estimate_address_orientation(
     stop = min(start + window, n)
     window_slice = slice(start, stop)
 
-    accel_avg, keep, robust_metrics = _robust_average_accel(accels[window_slice])
+    # Quiet-window scoring uses raw accel; tilt average may use signed-log to
+    # down-weight residual vibration spikes in the address hold.
+    accel_for_tilt = (
+        signed_log_compress(accels[window_slice]) if use_signed_log else accels[window_slice]
+    )
+    accel_avg, keep, robust_metrics = _robust_average_accel(accel_for_tilt)
     norm = float(np.linalg.norm(accel_avg))
     if norm < 1e-9:
         accel_avg = np.array([0.0, 0.0, G_NORM], dtype=np.float64)
@@ -170,7 +179,9 @@ def estimate_address_orientation(
         q0 = -q0
 
     win_gyro_rms = float(np.sqrt(np.mean(gyro_norm[window_slice] ** 2))) if stop > start else 0.0
-    norm_err = abs(norm - G_NORM) / G_NORM
+    # Quality still judged on raw accel magnitude (physical g)
+    raw_avg = float(np.linalg.norm(np.mean(accels[window_slice], axis=0)))
+    norm_err = abs(raw_avg - G_NORM) / G_NORM
     if norm_err < 0.08 and win_gyro_rms < 0.35:
         quality = "good"
     elif norm_err < 0.15 and win_gyro_rms < 0.75:
@@ -184,6 +195,7 @@ def estimate_address_orientation(
         "window_stop": int(stop),
         "gyro_norm_rms": win_gyro_rms,
         "accel_norm_error_g": float(norm_err),
+        "signed_log_tilt": bool(use_signed_log),
         "heading_convention": "min-tilt to world up; yaw = 0 in address frame",
     }
     metrics.update(robust_metrics)

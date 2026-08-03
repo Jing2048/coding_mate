@@ -25,7 +25,9 @@ from golfmate_algo.bench.stats import Summary, summarize
 from golfmate_algo.synth.analytic import planar_circular_swing
 from golfmate_algo.synth.imu_model import ImuErrorParams, apply_imu_errors
 from golfmate_algo.synth.session import make_session
+from golfmate_algo.traj.constrained import estimate_constrained_trajectory
 from golfmate_algo.traj.dead_reckon import reconstruct_trajectory
+from golfmate_algo.traj.hybrid import estimate_hybrid_trajectory
 from golfmate_algo.traj.lever_arm import estimate_lever_arm
 
 ArrayF = NDArray[np.float64]
@@ -222,12 +224,37 @@ def benchmark_traj_ablation(
         e_la = float(np.mean(np.linalg.norm(pos_la[window] - truth[window], axis=1) * 100.0))
         buckets.setdefault(("lever_arm", case.error_label), []).append(e_la)
 
+        hy = estimate_hybrid_trajectory(quats, gyro_c, case.accel, dt, ph)
+        pos_hy = hy.positions - hy.positions[ph.address_idx]
+        e_hy = float(np.mean(np.linalg.norm(pos_hy[window] - truth[window], axis=1) * 100.0))
+        buckets.setdefault(("hybrid", case.error_label), []).append(e_hy)
+
+        zupt = [ph.address_idx, ph.top_idx, ph.finish_idx]
+        try:
+            ct = estimate_constrained_trajectory(
+                quats, case.accel, dt, zupt, zero_position_index=ph.address_idx
+            )
+            pos_ct = ct.positions - ct.positions[ph.address_idx]
+            e_ct = float(
+                np.mean(np.linalg.norm(pos_ct[window] - truth[window], axis=1) * 100.0)
+            )
+        except (ValueError, np.linalg.LinAlgError):
+            e_ct = e_dr
+        buckets.setdefault(("constrained", case.error_label), []).append(e_ct)
+
         # Oracle orientation: isolates trajectory method from AHRS error
         q_true = case.swing.quats_true
         la_o = estimate_lever_arm(q_true, case.swing.packet.gyro, case.swing.packet.accel, dt)
         pos_o = la_o.positions - la_o.positions[ph.address_idx]
         e_o = float(np.mean(np.linalg.norm(pos_o[window] - truth[window], axis=1) * 100.0))
         buckets.setdefault(("lever_arm_oracle_R", case.error_label), []).append(e_o)
+
+        hy_o = estimate_hybrid_trajectory(
+            q_true, case.swing.packet.gyro, case.swing.packet.accel, dt, ph
+        )
+        pos_ho = hy_o.positions - hy_o.positions[ph.address_idx]
+        e_ho = float(np.mean(np.linalg.norm(pos_ho[window] - truth[window], axis=1) * 100.0))
+        buckets.setdefault(("hybrid_oracle_R", case.error_label), []).append(e_ho)
 
     out: dict[str, dict[str, Summary]] = {}
     for (alg, cond), vals in sorted(buckets.items()):
