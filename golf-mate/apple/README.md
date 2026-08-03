@@ -37,13 +37,24 @@ Set your Development Team for both targets, keep HealthKit enabled, and run on a
 Series 8 / Ultra or newer Watch. `CMBatchedSensorManager` does not provide high-rate data
 in the Watch simulator.
 
-## Analyze a transferred capture
+## Analyze with the full algorithm (required)
+
+Watch/iPhone **do not** ship a reduced Swift reimplementation. After capture arrives
+on the iPhone, the app POSTs the raw JSON to the Mac lab server, which runs the
+same `analyze_swing` pipeline used in pytest.
 
 ```bash
+# Terminal A — full-fidelity algorithm service
 cd golf-mate/algo
 source .venv/bin/activate
+python scripts/watch_lab_server.py --host 0.0.0.0 --port 8765
+
+# Optional offline file path
 python scripts/analyze_watch_capture.py ~/capture.json -o analysis.json
 ```
+
+On the iPhone app, set the analysis URL to `http://<your-mac-lan-ip>:8765`.
+Simulator can use `http://127.0.0.1:8765`.
 
 ## Required capabilities
 

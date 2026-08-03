@@ -239,29 +239,10 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     }
 
     private func authorizeHealthKit() async throws {
+        // watchOS 10+ provides a typed async HealthKit API; do not wrap the
+        // completion-handler variant in withCheckedThrowingContinuation or the
+        // Void generic cannot be inferred.
         let workout = HKObjectType.workoutType()
-        try await withCheckedThrowingContinuation { continuation in
-            healthStore.requestAuthorization(toShare: [workout], read: []) {
-                success,
-                error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if success {
-                    continuation.resume()
-                } else {
-                    continuation.resume(
-                        throwing: CaptureError.healthAuthorizationDenied
-                    )
-                }
-            }
-        }
-    }
-}
-
-private enum CaptureError: LocalizedError {
-    case healthAuthorizationDenied
-
-    var errorDescription: String? {
-        "Health access is required for 800 Hz capture."
+        try await healthStore.requestAuthorization(toShare: [workout], read: [])
     }
 }

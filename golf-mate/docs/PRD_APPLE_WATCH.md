@@ -8,8 +8,9 @@
    - 原生 800 Hz accelerometer 完整保留；
    - 原生 200 Hz Device Motion 完整保留；
    - 不在 Watch 上提前裁切、压缩或只上传摘要。
-2. **算法不打折**：首版不移植一套缩水 Swift 算法。iPhone 收到原始双流后，交给现有
-   Python `analyze_swing` 全链路；800 Hz 碰撞时间作为高精度 hint，AHRS/轨迹仍跑 200 Hz。
+2. **算法不打折**：不移植一套缩水 Swift 算法。iPhone 收到原始双流后，POST 到 Mac
+   上的 `watch_lab_server.py`，跑现有 Python `analyze_swing` 全链路；800 Hz 碰撞时间
+   作为高精度 hint，AHRS/轨迹仍跑 200 Hz。iPhone 直接展示完整分析结果。
 3. **表达不越界**：Watch 动态轨迹是采集状态的 motion field，不冒充已测三维轨迹；
    clubface / X-factor 等继续标为 `INFERRED`。
 
@@ -22,7 +23,8 @@
 3. Watch 内存环形缓存保留原始双流；
 4. 用户完成后点击「完成」，Watch 原子写入 `golfmate-watch-capture-v1` JSON；
 5. 使用 `WCSession.transferFile` 可靠发送到 iPhone；
-6. iPhone 可导出文件；开发验证端运行完整算法并输出报告。
+6. iPhone 自动把原始 JSON POST 到 Mac lab server（完整 Python 管道）；
+7. iPhone 展示 tempo / rhythm / phases / findings 等完整算法结果。
 
 ## UI 方向：Precision Kinetics
 

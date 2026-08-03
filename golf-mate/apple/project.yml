@@ -27,6 +27,8 @@ targets:
       properties:
         CFBundleDisplayName: Golf Mate Lab
         UILaunchScreen: {}
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
     entitlements:
