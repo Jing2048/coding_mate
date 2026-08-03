@@ -30,7 +30,7 @@ struct TransferStatusView: View {
                 }
                 .padding(24)
             }
-            .navigationTitle("Golf Mate Lab")
+            .navigationTitle("Golf-ai-Jing")
             .task {
                 await analysis.ping()
             }

@@ -1,6 +1,8 @@
-# Golf Mate Apple
+# Golf-ai-Jing (Apple)
 
 Native Apple Watch capture + iPhone transfer shell for end-to-end algorithm validation.
+
+App display name: **Golf-ai-Jing** (Watch + iPhone).
 
 ## Architecture
 

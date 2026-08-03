@@ -25,7 +25,7 @@ targets:
     info:
       path: Config/GolfMate-Info.plist
       properties:
-        CFBundleDisplayName: Golf Mate Lab
+        CFBundleDisplayName: Golf-ai-Jing
         UILaunchScreen: {}
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -45,10 +45,10 @@ targets:
     info:
       path: Config/GolfMateWatch-Info.plist
       properties:
-        CFBundleDisplayName: Golf Mate
-        NSMotionUsageDescription: Golf Mate uses full-rate wrist motion to analyze your golf swing.
-        NSHealthShareUsageDescription: Golf Mate starts a golf workout to enable high-rate motion capture.
-        NSHealthUpdateUsageDescription: Golf Mate records the active golf workout used for swing capture.
+        CFBundleDisplayName: Golf-ai-Jing
+        NSMotionUsageDescription: Golf-ai-Jing uses full-rate wrist motion to analyze your golf swing.
+        NSHealthShareUsageDescription: Golf-ai-Jing starts a golf workout to enable high-rate motion capture.
+        NSHealthUpdateUsageDescription: Golf-ai-Jing records the active golf workout used for swing capture.
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.golfmate.lab.GolfMate
     entitlements:
