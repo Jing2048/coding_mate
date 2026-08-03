@@ -2,7 +2,12 @@
 
 Native Apple Watch capture + iPhone transfer shell for end-to-end algorithm validation.
 
-App display name: **Golf-ai-Jing** (Watch + iPhone).
+App display / product name: **Golf-ai-Jing** (Watch + iPhone).
+
+Bundle IDs (unique; `GolfMate` is taken on App Store Connect):
+
+- iPhone: `com.jing.golfai.GolfAiJing`
+- Watch: `com.jing.golfai.GolfAiJing.watchkitapp`
 
 ## Architecture
 
@@ -32,12 +37,15 @@ reproducible:
 cd golf-mate/apple
 brew install xcodegen
 xcodegen generate
-open GolfMate.xcodeproj
+open GolfAiJing.xcodeproj
 ```
 
-Set your Development Team for both targets, keep HealthKit enabled, and run on a physical
-Series 8 / Ultra or newer Watch. `CMBatchedSensorManager` does not provide high-rate data
-in the Watch simulator.
+If an old `GolfMate.xcodeproj` is still open, close it and open the regenerated
+`GolfAiJing.xcodeproj`. Set your Development Team for both targets, keep HealthKit
+enabled, and run on a physical Series 8 / Ultra or newer Watch.
+`CMBatchedSensorManager` does not provide high-rate data in the Watch simulator.
+
+In App Store Connect, create the app as **Golf-ai-Jing** (not GolfMate).
 
 ## Analyze with the full algorithm (required)
 

@@ -1,6 +1,6 @@
-name: GolfMate
+name: GolfAiJing
 options:
-  bundleIdPrefix: com.golfmate.lab
+  bundleIdPrefix: com.jing.golfai
   deploymentTarget:
     iOS: "17.0"
     watchOS: "10.0"
@@ -14,18 +14,25 @@ settings:
     CODE_SIGN_STYLE: Automatic
     CURRENT_PROJECT_VERSION: 1
     MARKETING_VERSION: 0.1.0
+    # App Store Connect product / archive name (must be unique; GolfMate is taken)
+    PRODUCT_NAME: Golf-ai-Jing
 
 targets:
-  GolfMate:
+  GolfAiJing:
     type: application
     platform: iOS
     sources:
-      - GolfMate
-      - Shared
+      - path: GolfMate
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jing.golfai.GolfAiJing
+        PRODUCT_NAME: Golf-ai-Jing
     info:
       path: Config/GolfMate-Info.plist
       properties:
         CFBundleDisplayName: Golf-ai-Jing
+        CFBundleName: Golf-ai-Jing
         UILaunchScreen: {}
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -34,35 +41,39 @@ targets:
     entitlements:
       path: Config/GolfMate.entitlements
     dependencies:
-      - target: GolfMateWatch
+      - target: GolfAiJingWatch
+        embed: true
 
-  GolfMateWatch:
+  GolfAiJingWatch:
     type: application
     platform: watchOS
     sources:
-      - GolfMateWatch
-      - Shared
+      - path: GolfMateWatch
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jing.golfai.GolfAiJing.watchkitapp
+        PRODUCT_NAME: Golf-ai-Jing
+        WATCHOS_DEPLOYMENT_TARGET: "10.0"
     info:
       path: Config/GolfMateWatch-Info.plist
       properties:
         CFBundleDisplayName: Golf-ai-Jing
+        CFBundleName: Golf-ai-Jing
         NSMotionUsageDescription: Golf-ai-Jing uses full-rate wrist motion to analyze your golf swing.
         NSHealthShareUsageDescription: Golf-ai-Jing starts a golf workout to enable high-rate motion capture.
         NSHealthUpdateUsageDescription: Golf-ai-Jing records the active golf workout used for swing capture.
         WKApplication: true
-        WKCompanionAppBundleIdentifier: com.golfmate.lab.GolfMate
+        WKCompanionAppBundleIdentifier: com.jing.golfai.GolfAiJing
     entitlements:
       path: Config/GolfMateWatch.entitlements
-    settings:
-      base:
-        WATCHOS_DEPLOYMENT_TARGET: "10.0"
 
 schemes:
-  GolfMate:
+  Golf-ai-Jing:
     build:
       targets:
-        GolfMate: all
-        GolfMateWatch: all
+        GolfAiJing: all
+        GolfAiJingWatch: all
     run:
       config: Debug
     archive:
