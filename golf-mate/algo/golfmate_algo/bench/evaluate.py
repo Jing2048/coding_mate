@@ -28,8 +28,11 @@ import numpy as np
 from golfmate_algo.ahrs import init as ahrs_init
 from golfmate_algo.ahrs import suite as ahrs_suite
 from golfmate_algo.bench.ablation import benchmark_degradation
-from golfmate_algo.bench.datasets import multisense as msg
+from golfmate_algo.bench.datasets import cmu64, multisense as msg
+from golfmate_algo.bench.datasets import wit_kinnet
 from golfmate_algo.bench.gates import check_gates
+from golfmate_algo.bench.golden.catalog import ranked_catalog
+from golfmate_algo.bench.golden import scirep_budgets
 from golfmate_algo.bench.harness import (
     SwingCase,
     orientation_error_deg,
@@ -53,7 +56,7 @@ from golfmate_algo.synth.session import make_session
 from golfmate_algo.traj.dead_reckon import reconstruct_trajectory
 from golfmate_algo.traj.hybrid import estimate_hybrid_trajectory
 from golfmate_algo.traj.lever_arm import estimate_lever_arm
-from golfmate_algo.types import ImuPacket, SensorFrame
+from golfmate_algo.types import ImuPacket
 
 
 def _sum_dict(s: Summary) -> dict[str, Any]:
@@ -204,7 +207,7 @@ def _score_e2e(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
     for case in cases:
         fs = case.swing.packet.frame.fs_hz
         packet = ImuPacket(
-            frame=SensorFrame(fs_hz=fs),
+            frame=case.swing.packet.frame,
             t=case.t,
             gyro=case.gyro,
             accel=case.accel,
@@ -263,7 +266,18 @@ def _score_track(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
             else (
                 "assumption_stress"
                 if "violate" in cases[0].generator
-                else "cross_generator_accurate"
+                else (
+                    "robust_golden_regime"
+                    if cases[0].generator
+                    in {
+                        "pro_regime",
+                        "casting_pathology",
+                        "fs_stress",
+                        "clip_stress",
+                        "lefty_mirror",
+                    }
+                    else "cross_generator_accurate"
+                )
             )
         ),
     }
@@ -306,6 +320,7 @@ def _score_multisense(
     *,
     subjects: list[str] | None = None,
     track_label: str = "external_multisense",
+    club_speed_min_m_s: float | None = None,
 ) -> dict[str, Any]:
     st = msg.dataset_status()
     if not st["ready"]:
@@ -320,9 +335,14 @@ def _score_multisense(
     impact: list[float] = []
     pos: list[float] = []
     impact_modes: list[str] = []
+    speeds: list[float] = []
     fails = 0
     n = 0
-    for case in msg.iter_local_swings(max_swings=max_swings, subjects=subjects):
+    for case in msg.iter_local_swings(
+        max_swings=max_swings,
+        subjects=subjects,
+        club_speed_min_m_s=club_speed_min_m_s,
+    ):
         n += 1
         try:
             report = analyze_swing(case.packet)
@@ -331,8 +351,6 @@ def _score_multisense(
             continue
         fs = case.packet.frame.fs_hz
         impact.append(abs(report.phases.impact_idx - case.impact_idx) / fs * 1000.0)
-        # Full overlapping record after yaw alignment (address→finish window can
-        # amplify errors when phase labels sit on residual motion).
         nq = min(report.quats.shape[0], case.quats_ref.shape[0])
         aligned = _yaw_align(report.quats[:nq], case.quats_ref[:nq], 0)
         ori.append(float(np.mean(orientation_error_deg(aligned, case.quats_ref[:nq]))))
@@ -345,14 +363,18 @@ def _score_multisense(
         )
         pos.append(float(np.mean(np.linalg.norm(pos_e - truth, axis=1) * 100.0)))
         impact_modes.append(str(report.meta.get("impact_mode", "unknown")))
+        sp = float(case.reference.get("club_speed_m_s", float("nan")))
+        if np.isfinite(sp):
+            speeds.append(sp)
 
     if n == 0:
         return {
             "status": "unavailable",
-            "reason": "no swings loaded for requested subjects",
+            "reason": "no swings loaded for requested subjects/filters",
             "dataset": st,
             "track": track_label,
             "subjects_filter": subjects,
+            "club_speed_min_m_s": club_speed_min_m_s,
         }
 
     return {
@@ -363,6 +385,10 @@ def _score_multisense(
         "n_swings": n,
         "pipeline_failures": fails,
         "subjects_filter": subjects,
+        "club_speed_min_m_s": club_speed_min_m_s,
+        "club_speed_m_s": _sum_dict(summarize(speeds, n_boot=n_boot, seed=63))
+        if speeds
+        else None,
         "dataset": st,
         "orientation_deg": _sum_dict(summarize(ori, n_boot=n_boot, seed=60)),
         "impact_ms": _sum_dict(summarize(impact, n_boot=n_boot, seed=61)),
@@ -383,7 +409,89 @@ def _score_multisense(
                 if subjects
                 else ""
             )
+            + (
+                f" Club-speed stratum ≥ {club_speed_min_m_s} m/s."
+                if club_speed_min_m_s is not None
+                else ""
+            )
         ),
+    }
+
+
+def _score_cmu64(n_boot: int, max_swings: int = 8) -> dict[str, Any]:
+    st = cmu64.dataset_status()
+    if not st["ready"]:
+        return {
+            "status": "unavailable",
+            "reason": "run scripts/fetch_cmu64.py (or place ASF/AMC under data/cmu64/raw)",
+            "dataset": st,
+            "track": "external_cmu64",
+        }
+    from golfmate_algo.ahrs.suite import GyroOnly
+
+    ori: list[float] = []
+    ori_gyro: list[float] = []
+    impact: list[float] = []
+    pos: list[float] = []
+    fails = 0
+    n = 0
+    for case in cmu64.iter_local_swings(max_swings=max_swings):
+        n += 1
+        try:
+            report = analyze_swing(case.packet)
+        except Exception:
+            fails += 1
+            continue
+        fs = case.packet.frame.fs_hz
+        dt = 1.0 / fs
+        impact.append(
+            abs(report.phases.impact_idx - case.phases.impact_idx) / fs * 1000.0
+        )
+        nq = min(report.quats.shape[0], case.quats_ref.shape[0])
+        aligned = _yaw_align(report.quats[:nq], case.quats_ref[:nq], 0)
+        ori.append(float(np.mean(orientation_error_deg(aligned, case.quats_ref[:nq]))))
+        # SciRep-style: pure gyro is the fairer ceiling for mocap-synth IMU
+        q_g, _ = GyroOnly().run(
+            case.packet.gyro, case.packet.accel, dt, q0=case.quats_ref[0]
+        )
+        aligned_g = _yaw_align(q_g[:nq], case.quats_ref[:nq], 0)
+        ori_gyro.append(
+            float(np.mean(orientation_error_deg(aligned_g, case.quats_ref[:nq])))
+        )
+        truth = case.positions_ref[:nq] - case.positions_ref[0]
+        pos_e = _yaw_rotate_positions(
+            report.positions[:nq], report.quats[:nq], case.quats_ref[:nq], 0
+        )
+        pos.append(float(np.mean(np.linalg.norm(pos_e - truth, axis=1) * 100.0)))
+    if n == 0:
+        return {
+            "status": "unavailable",
+            "reason": "no CMU trials parsed",
+            "dataset": st,
+            "track": "external_cmu64",
+        }
+    return {
+        "status": "ok",
+        "track": "external_cmu64",
+        "provenance": "cmu64_mocap_synth_imu",
+        "n_swings": n,
+        "pipeline_failures": fails,
+        "dataset": st,
+        "orientation_deg": _sum_dict(summarize(ori, n_boot=n_boot, seed=70)),
+        "orientation_gyro_only_deg": _sum_dict(
+            summarize(ori_gyro, n_boot=n_boot, seed=73)
+        ),
+        "impact_ms": _sum_dict(summarize(impact, n_boot=n_boot, seed=71)),
+        "position_cm": _sum_dict(summarize(pos, n_boot=n_boot, seed=72)),
+        "credibility": "external_real_motion_mocap_synth_imu",
+        "caveat": (
+            "CMU Subject 64 golf mocap → synth wrist IMU via ASF/AMC FK. "
+            "Commercial-friendly license (do not resell mocap). "
+            "Impact is kinematic (no ball). Not raw MEMS. "
+            "Gate uses gyro-only orientation (SciRep-style) because mocap-diff "
+            "accel is too noisy for tilt fusion."
+        ),
+        "license_note": st.get("license_note"),
     }
 
 
@@ -581,6 +689,73 @@ def render_zero_trust_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"| 位置 cm | {_fmt_ci(elite.get('position_cm'))} |")
     lines.append("")
 
+    hs = by.get("external_multisense_high_speed", {})
+    lines.append("## 7c. MultiSense 高球速分层（club_speed ≥ 20 m/s）")
+    lines.append("")
+    if hs.get("status") != "ok":
+        lines.append(f"状态：**{hs.get('status', 'unavailable')}** — {hs.get('reason', 'n/a')}")
+    else:
+        lines.append(
+            f"状态：**ok** · n={hs.get('n_swings')} · {hs.get('caveat', '')}"
+        )
+        lines.append("")
+        lines.append("| 指标 | mean [CI] |")
+        lines.append("|------|----------:|")
+        lines.append(f"| 姿态 ° | {_fmt_ci(hs.get('orientation_deg'))} |")
+        lines.append(f"| Impact ms | {_fmt_ci(hs.get('impact_ms'))} |")
+        lines.append(f"| 位置 cm | {_fmt_ci(hs.get('position_cm'))} |")
+        lines.append(f"| Club speed m/s | {_fmt_ci(hs.get('club_speed_m_s'))} |")
+    lines.append("")
+
+    cmu = by.get("external_cmu64", {})
+    lines.append("## 7d. CMU Subject 64（商用友好 mocap → synth IMU）")
+    lines.append("")
+    if cmu.get("status") != "ok":
+        lines.append(f"状态：**{cmu.get('status', 'unavailable')}** — {cmu.get('reason', 'n/a')}")
+    else:
+        lines.append(
+            f"状态：**ok** · n={cmu.get('n_swings')} · {cmu.get('caveat', '')}"
+        )
+        lines.append("")
+        lines.append("| 指标 | mean [CI] |")
+        lines.append("|------|----------:|")
+        lines.append(f"| 姿态 ° | {_fmt_ci(cmu.get('orientation_deg'))} |")
+        lines.append(f"| Impact ms | {_fmt_ci(cmu.get('impact_ms'))} |")
+        lines.append(f"| 位置 cm | {_fmt_ci(cmu.get('position_cm'))} |")
+    lines.append("")
+
+    lines.append("## 7e. Robust golden synth tracks")
+    lines.append("")
+    lines.append("| Track | ori ° | impact ms | pos cm |")
+    lines.append("|-------|------:|----------:|-------:|")
+    for name in (
+        "pro_regime",
+        "casting_pathology",
+        "fs_stress",
+        "clip_stress",
+        "lefty_mirror",
+    ):
+        tr = by.get(name, {})
+        e2e = tr.get("e2e", {}) if isinstance(tr, dict) else {}
+        row = e2e.get("consumer") or next(iter(e2e.values()), None) if e2e else None
+        if not row:
+            lines.append(f"| {name} | — | — | — |")
+        else:
+            lines.append(
+                f"| {name} | {_fmt_ci(row.get('orientation_deg'))} | "
+                f"{_fmt_ci(row.get('impact_ms'))} | {_fmt_ci(row.get('position_cm'))} |"
+            )
+    lines.append("")
+
+    wit = by.get("external_wit_kinnet", {})
+    lines.append("## 7f. WIT-KinNet stub（最高产品契合，待发布）")
+    lines.append("")
+    lines.append(
+        f"状态：**{wit.get('status', 'unavailable')}** — {wit.get('reason', 'n/a')} · "
+        f"{wit.get('arxiv', '')}"
+    )
+    lines.append("")
+
     deg = payload.get("degradation", {})
     if deg.get("session"):
         lines.append("## 8. 退化曲线（会话，gated vs gyro_only）")
@@ -598,10 +773,13 @@ def render_zero_trust_markdown(payload: dict[str, Any]) -> str:
     lines.append("```bash")
     lines.append("cd golf-mate/algo && source .venv/bin/activate")
     lines.append("python scripts/fetch_multisense.py --max-swings 30")
+    lines.append("python scripts/fetch_cmu64.py")
     lines.append("python scripts/seal_holdout.py")
     lines.append("python -m golfmate_algo.bench.evaluate --mode full")
     lines.append("pytest -q")
     lines.append("```")
+    lines.append("")
+    lines.append("Golden catalog: `docs/research/07_golden_sources.md`.")
     lines.append("")
     return "\n".join(lines)
 
@@ -634,7 +812,7 @@ def run_evaluation(
         n_boot = min(n_boot, 400)
         n_dev = n_dev or 2
         include_degradation = False
-    gens = generators or ["analytic", "multibody", "multibody_violate"]
+    gens = generators or ["analytic", "multibody", "multibody_violate", "robust_golden"]
     tracks = build_protocol_cases(mode=mode if mode != "full" else "dev", generators=gens, n_dev=n_dev)
     # full mode also scores holdout seeds separately for seal check
     holdout_info: dict[str, Any] = {"enabled": False}
@@ -646,7 +824,11 @@ def run_evaluation(
             sealed = load_holdout_manifest()
         hold_tracks = build_protocol_cases(
             mode="holdout",
-            generators=[g for g in gens if g != "multibody_violate"],
+            generators=[
+                g
+                for g in gens
+                if g not in ("multibody_violate", "robust_golden")
+            ],
         )
         mismatches = verify_holdout_inputs(hold_tracks)
         holdout_info = {
@@ -662,12 +844,23 @@ def run_evaluation(
     for name, cases in tracks.items():
         # quick: consumer-only to save time
         if quick:
-            cases = [c for c in cases if c.error_label == "consumer"]
+            cases = [
+                c
+                for c in cases
+                if c.error_label == "consumer" or c.error_label.startswith("consumer")
+            ]
         by_track[name] = _score_track(cases, n_boot)
 
     if include_multisense:
         by_track["external_multisense"] = _score_multisense(
             n_boot, max_swings=10 if quick else 30
+        )
+        # High club-speed stratum (even on non-elite subjects) — faster timing
+        by_track["external_multisense_high_speed"] = _score_multisense(
+            n_boot,
+            max_swings=10 if quick else 20,
+            club_speed_min_m_s=20.0,
+            track_label="external_multisense_high_speed",
         )
         from golfmate_algo.reference.elite import elite_subject_ids
 
@@ -693,6 +886,12 @@ def run_evaluation(
                 "elite_manifest_subjects": elite_ids,
                 "track": "external_multisense_elite",
             }
+        by_track["external_cmu64"] = _score_cmu64(n_boot, max_swings=5 if quick else 10)
+        by_track["external_wit_kinnet"] = {
+            "status": "unavailable",
+            **wit_kinnet.dataset_status(),
+            "track": "external_wit_kinnet",
+        }
     else:
         by_track["external_multisense"] = {
             "status": "skipped",
@@ -733,6 +932,11 @@ def run_evaluation(
             "quick": quick,
             "disclaimer_isomorphic_upper_bound": True,
             "fs_hz": 200.0,
+            "scirep_position_cm_ref": scirep_budgets.POSITION_CM_WHOLE_SWING,
+            "golden_sources": [
+                {"rank": s.rank, "name": s.name, "commercial_eval_ok": s.commercial_eval_ok}
+                for s in ranked_catalog()
+            ],
         },
         "by_track": by_track,
         "session": session,

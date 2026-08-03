@@ -124,6 +124,8 @@
 
 仍明确推迟：latent 全身 PCR、batch MAP smoother、真实多刚体空间 DoF、原始表盘 MEMS gold set。
 
+更高价值 golden / 外部闸门清单见 `docs/research/07_golden_sources.md`（MultiSense 分层、CMU-64、SciRep 预算、WIT-KinNet stub、robust synth regimes）。
+
 ---
 
 ## 8. 本轮工程验收命令

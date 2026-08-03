@@ -20,6 +20,7 @@ from golfmate_algo.bench.harness import (
     SwingCase,
     build_cases,
     build_cases_multibody,
+    build_cases_robust_golden,
 )
 
 Mode = Literal["dev", "holdout", "full"]
@@ -79,6 +80,10 @@ def build_protocol_cases(
         out["violation_stress"] = build_cases_multibody(
             seeds=seeds, error_levels=error_levels, violate=True
         )
+    if "robust_golden" in gens:
+        # Higher-value regimes; not part of the sealed holdout fingerprint set.
+        robust = build_cases_robust_golden(seeds=seeds[: max(1, min(3, len(seeds)))])
+        out.update(robust)
     return out
 
 

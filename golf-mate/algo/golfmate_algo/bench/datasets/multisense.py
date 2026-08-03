@@ -395,8 +395,14 @@ def iter_local_swings(
     *,
     max_swings: int | None = 40,
     subjects: list[str] | None = None,
+    club_speed_min_m_s: float | None = None,
+    club_speed_max_m_s: float | None = None,
 ) -> Iterator[ExternalSwingCase]:
-    """Yield swings from extracted ``SubXX/SwingYY/*.hdf5`` trees."""
+    """Yield swings from extracted ``SubXX/SwingYY/*.hdf5`` trees.
+
+    Optional club-speed filters create a high-value stratum even when only a
+    beginner subject (e.g. Sub07) is extracted locally.
+    """
     root = root or DEFAULT_ROOT
     status = dataset_status(root)
     if not status["ready"]:
@@ -423,11 +429,21 @@ def iter_local_swings(
             if ann is None:
                 continue
             try:
-                yield load_swing_hdf5(
+                case = load_swing_hdf5(
                     hdf5, annotation=ann, handedness=handed, subject_id=sub.name
                 )
             except Exception:
                 continue
+            speed = float(case.reference.get("club_speed_m_s", float("nan")))
+            if club_speed_min_m_s is not None and not (
+                np.isfinite(speed) and speed >= club_speed_min_m_s
+            ):
+                continue
+            if club_speed_max_m_s is not None and not (
+                np.isfinite(speed) and speed <= club_speed_max_m_s
+            ):
+                continue
+            yield case
             count += 1
             if max_swings is not None and count >= max_swings:
                 return

@@ -27,10 +27,17 @@ from golfmate_algo.events.segmental import detect_phases_segmental
 from golfmate_algo.math import so3
 from golfmate_algo.synth.analytic import SyntheticSwing, planar_circular_swing
 from golfmate_algo.synth.imu_model import ImuErrorParams, apply_imu_errors
-from golfmate_algo.synth.multibody import SwingConfig, SwingTruth, build_swing, casting_swing
+from golfmate_algo.synth.multibody import (
+    SwingConfig,
+    SwingTruth,
+    build_swing,
+    casting_swing,
+    pro_sequence_swing,
+)
 from golfmate_algo.synth.violations import ViolationSpec, apply_violations, mild_violation
 from golfmate_algo.traj.dead_reckon import reconstruct_trajectory
 from golfmate_algo.traj.lever_arm import estimate_lever_arm
+from golfmate_algo.types import Handedness
 
 ArrayF = NDArray[np.float64]
 
@@ -301,6 +308,176 @@ def build_cases_multibody(
                     )
                 )
     return cases
+
+
+def build_cases_robust_golden(
+    *,
+    seeds: Iterable[int] = (0, 1, 2),
+    error_levels: dict[str, Callable[[int], ImuErrorParams]] | None = None,
+) -> dict[str, list[SwingCase]]:
+    """Higher-value synthetic golden tracks beyond planar isomorphic swings.
+
+    Tracks
+    ------
+    * ``pro_regime`` — translating centre (sway/lift) + pro-like sequence
+    * ``casting_pathology`` — early club release with distal (club) mount
+    * ``fs_stress`` — consumer noise at 50 / 100 Hz (watch-like ODR)
+    * ``clip_stress`` — SciRep-style saturation (±1000–2000 °/s)
+    * ``lefty_mirror`` — left-handed device frame through normalize path
+    """
+    if error_levels is None:
+        error_levels = {
+            "consumer": lambda s: ImuErrorParams.consumer_grade(seed=s),
+        }
+
+    out: dict[str, list[SwingCase]] = {
+        "pro_regime": [],
+        "casting_pathology": [],
+        "fs_stress": [],
+        "clip_stress": [],
+        "lefty_mirror": [],
+    }
+
+    for seed in seeds:
+        # --- pro translating centre ---
+        truth = pro_sequence_swing(
+            sway_m=0.03 + 0.01 * (seed % 3),
+            lift_m=0.015 + 0.005 * (seed % 2),
+            plane_tilt_deg=50.0 + (seed % 5),
+        )
+        # resample-ish: rebuild at 200 Hz via config if needed
+        swing = multibody_to_synthetic(truth)
+        gyro0 = truth.gyro_body.copy()
+        accel0 = _inject_impact_shock(
+            truth.t, truth.sensor_quat, truth.accel_body.copy(), truth.impact_idx
+        )
+        for ename, factory in error_levels.items():
+            t2, g2, a2, _ = apply_imu_errors(truth.t, gyro0, accel0, factory(seed))
+            out["pro_regime"].append(
+                SwingCase(
+                    label=f"pro_regime/sway/seed{seed}",
+                    swing=swing,
+                    gyro=g2,
+                    accel=a2,
+                    t=t2,
+                    error_label=ename,
+                    generator="pro_regime",
+                    assumptions={
+                        "rigid_fixed_center": False,
+                        "family": "pro_regime",
+                        "center_sway_amp_m": float(truth.meta.get("center_sway_amp_m", 0.0)),
+                    },
+                )
+            )
+
+        # --- casting with distal mount ---
+        cast = casting_swing(
+            SwingConfig(fs_hz=200.0, plane_tilt_deg=55.0, backswing_s=0.8, downswing_s=0.27)
+        )
+        swing_c = multibody_to_synthetic(cast)
+        g0 = cast.gyro_body.copy()
+        a0 = _inject_impact_shock(
+            cast.t, cast.sensor_quat, cast.accel_body.copy(), cast.impact_idx
+        )
+        for ename, factory in error_levels.items():
+            t2, g2, a2, _ = apply_imu_errors(cast.t, g0, a0, factory(seed + 17))
+            out["casting_pathology"].append(
+                SwingCase(
+                    label=f"casting_pathology/mount3/seed{seed}",
+                    swing=swing_c,
+                    gyro=g2,
+                    accel=a2,
+                    t=t2,
+                    error_label=ename,
+                    generator="casting_pathology",
+                    assumptions={
+                        "rigid_fixed_center": True,
+                        "family": "casting",
+                        "mount_segment": float(cast.config.mount_segment),
+                        "sequence_ok": bool(cast.kinematic_sequence_ok()),
+                    },
+                )
+            )
+
+        # --- fs stress ---
+        for fs in (50.0, 100.0):
+            cfg = SwingConfig(fs_hz=fs, plane_tilt_deg=55.0)
+            tr = build_swing(cfg)
+            sw = multibody_to_synthetic(tr)
+            g0 = tr.gyro_body.copy()
+            a0 = _inject_impact_shock(
+                tr.t, tr.sensor_quat, tr.accel_body.copy(), tr.impact_idx
+            )
+            for ename, factory in error_levels.items():
+                t2, g2, a2, _ = apply_imu_errors(tr.t, g0, a0, factory(seed + int(fs)))
+                out["fs_stress"].append(
+                    SwingCase(
+                        label=f"fs_stress/{int(fs)}hz/seed{seed}",
+                        swing=sw,
+                        gyro=g2,
+                        accel=a2,
+                        t=t2,
+                        error_label=ename,
+                        generator="fs_stress",
+                        assumptions={"family": "fs_stress", "fs_hz": fs},
+                    )
+                )
+
+        # --- clip stress (SciRep-like range) ---
+        cfg = SwingConfig(fs_hz=200.0, plane_tilt_deg=52.0, downswing_s=0.22)
+        tr = build_swing(cfg)
+        sw = multibody_to_synthetic(tr)
+        g0 = tr.gyro_body.copy()
+        a0 = _inject_impact_shock(
+            tr.t, tr.sensor_quat, tr.accel_body.copy(), tr.impact_idx
+        )
+        clip_params = ImuErrorParams.consumer_grade(seed=seed + 99)
+        clip_params.gyro_range_deg_s = 1000.0  # will clip tour-like peaks
+        clip_params.accel_range_g = 16.0
+        t2, g2, a2, meta = apply_imu_errors(tr.t, g0, a0, clip_params)
+        out["clip_stress"].append(
+            SwingCase(
+                label=f"clip_stress/1k_dps/seed{seed}",
+                swing=sw,
+                gyro=g2,
+                accel=a2,
+                t=t2,
+                error_label="consumer_clip",
+                generator="clip_stress",
+                assumptions={
+                    "family": "clip_stress",
+                    "gyro_saturated_frac": float(meta.gyro_saturated_frac),
+                },
+            )
+        )
+
+        # --- lefty: corrupt the already-framed lefty packet (avoid double-mirror) ---
+        cfg = SwingConfig(
+            fs_hz=200.0, plane_tilt_deg=55.0, handedness=Handedness.LEFT
+        )
+        tr = build_swing(cfg)
+        sw = multibody_to_synthetic(tr)
+        pkt = tr.to_imu_packet()
+        # Inject strike transient in the framed packet so impact detectors can lock.
+        a_shock = _inject_impact_shock(
+            pkt.t, tr.sensor_quat, pkt.accel.copy(), tr.impact_idx
+        )
+        for ename, factory in error_levels.items():
+            t2, g2, a2, _ = apply_imu_errors(pkt.t, pkt.gyro, a_shock, factory(seed + 7))
+            out["lefty_mirror"].append(
+                SwingCase(
+                    label=f"lefty_mirror/seed{seed}",
+                    swing=sw,
+                    gyro=g2,
+                    accel=a2,
+                    t=t2,
+                    error_label=ename,
+                    generator="lefty_mirror",
+                    assumptions={"family": "lefty", "handedness": "LEFT"},
+                )
+            )
+
+    return out
 
 
 def benchmark_orientation(cases: list[SwingCase]) -> list[MetricRow]:

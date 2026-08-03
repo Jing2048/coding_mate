@@ -138,6 +138,93 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
             f"(eval gate only, not in-product posture library)"
         )
 
+    hs = by.get("external_multisense_high_speed", {})
+    if hs.get("status") == "ok":
+        notes.append(
+            f"multisense high-speed stratum n={hs.get('n_swings')} "
+            f"(club_speed ≥ {hs.get('club_speed_min_m_s')} m/s)"
+        )
+        e_ori = _mean(hs, "orientation_deg")
+        if e_ori is not None and e_ori > 25.0:
+            violations.append(
+                f"multisense high-speed orientation {e_ori:.1f}° exceeds 25° ceiling"
+            )
+    elif hs.get("status") == "unavailable":
+        notes.append(f"multisense high-speed unavailable: {hs.get('reason', 'n/a')}")
+
+    cmu = by.get("external_cmu64", {})
+    if cmu.get("status") == "ok":
+        notes.append(f"external_cmu64 scored n={cmu.get('n_swings')}")
+        # Prefer SciRep-style gyro-only ceiling for mocap-synth IMU.
+        e_ori = _mean(cmu, "orientation_gyro_only_deg")
+        if e_ori is None:
+            e_ori = _mean(cmu, "orientation_deg")
+        if e_ori is not None and e_ori > 20.0:
+            violations.append(
+                f"cmu64 gyro-only orientation {e_ori:.1f}° exceeds 20° sanity ceiling"
+            )
+    elif cmu.get("status") == "unavailable":
+        notes.append(f"external_cmu64 unavailable: {cmu.get('reason', 'n/a')}")
+
+    wit = by.get("external_wit_kinnet", {})
+    if wit:
+        notes.append(
+            f"wit_kinnet: {wit.get('status', 'unavailable')} — {wit.get('reason', '')}"
+        )
+
+    # --- robust golden tracks (regression ceilings — harder than isomorphic,
+    # looser than citeable cross_multibody consumer product gates) ---
+    for track, impact_budget, pos_budget, ori_budget in (
+        ("pro_regime", 40.0, 35.0, 40.0),
+        ("casting_pathology", 50.0, 120.0, 40.0),
+        ("fs_stress", 150.0, 40.0, 20.0),
+        ("lefty_mirror", 300.0, 35.0, 15.0),
+    ):
+        tr = by.get(track, {})
+        if not tr or tr.get("empty"):
+            continue
+        # Prefer e2e consumer; fall back to events/traj
+        imp = _mean(tr, "e2e", "consumer", "impact_ms")
+        if imp is None:
+            imp = _mean(tr, "events", "impact", "consumer")
+        pos = _mean(tr, "e2e", "consumer", "position_cm")
+        ori = _mean(tr, "e2e", "consumer", "orientation_deg")
+        if imp is not None and imp > impact_budget:
+            violations.append(
+                f"{track} impact MAE {imp:.1f} ms exceeds {impact_budget:.0f} ms budget"
+            )
+        if pos is not None and pos > pos_budget:
+            violations.append(
+                f"{track} position MAE {pos:.1f} cm exceeds {pos_budget:.0f} cm budget"
+            )
+        if ori is not None and ori > ori_budget:
+            violations.append(
+                f"{track} orientation MAE {ori:.1f}° exceeds {ori_budget:.0f}° budget"
+            )
+        if imp is not None or pos is not None or ori is not None:
+            notes.append(
+                f"{track}: ori={ori}, impact={imp}, pos={pos} "
+                f"(budgets {ori_budget}/{impact_budget}/{pos_budget})"
+            )
+
+    clip = by.get("clip_stress", {})
+    if clip and not clip.get("empty"):
+        # Clip stress must remain runnable (finite e2e); budgets are softer.
+        ori = _mean(clip, "e2e", "consumer_clip", "orientation_deg")
+        if ori is None:
+            # error_label is consumer_clip — also try nested keys
+            e2e = clip.get("e2e", {})
+            for k, row in e2e.items():
+                if isinstance(row, dict) and "orientation_deg" in row:
+                    ori = _mean(row, "orientation_deg")
+                    break
+        if ori is not None and ori > 25.0:
+            violations.append(
+                f"clip_stress orientation {ori:.1f}° exceeds 25° soft ceiling"
+            )
+        else:
+            notes.append(f"clip_stress orientation {ori}")
+
     # --- holdout seal ---
     hold = payload.get("holdout", {})
     if hold.get("enabled") and hold.get("mismatches"):
