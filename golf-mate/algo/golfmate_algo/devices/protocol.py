@@ -11,8 +11,9 @@ from golfmate_algo.types import ImuPacket
 class DeviceAdapter(Protocol):
     """Convert a device-native batch into an ``ImuPacket``.
 
-    Implementations live at the client edge (Swift Watch kit, glove BLE
-    bridge, or bench loaders). The algo package ships only specs + fakes.
+    Implementations live at the client edge (Swift Watch kit under
+    ``golf-mate/apple``, glove BLE bridge, or bench loaders). The Python edge
+    adapter for Watch capture files is ``devices.watch_capture``.
     """
 
     device_id: str

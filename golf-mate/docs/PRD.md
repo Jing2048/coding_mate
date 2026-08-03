@@ -1,6 +1,7 @@
 # Golf Mate — 产品需求
 
-> 状态：`in_progress` · 本轮核心 = **算法 P0 验证**（非 App）
+> 状态：`in_progress` · 算法 P0 已验证；Apple Watch E2E 见
+> [`PRD_APPLE_WATCH.md`](PRD_APPLE_WATCH.md)
 
 ## 产品一句话
 
@@ -13,7 +14,8 @@
 - [x] 解析真值 + 合成挥杆严格 UT（`pytest` 全绿）
 - [ ] P1：单腕→全身映射 + MultiSenseGolf 回归
 - [ ] P2：运动签名 / 前向动力学
-- [ ] App / Watch / 自研传感器固件（后续轮次）
+- [x] Apple Watch E2E 验证版（800/200 Hz 双流 + iPhone 文件传输）
+- [ ] 自研传感器固件
 
 ## P0 交付能力
 
@@ -27,7 +29,6 @@
 
 ## 非目标（本轮）
 
-- 不做 App UI / iOS / Watch 工程
 - 不做真实硬件联调
 - 不把 PCR 推断的杆面/腕角伪称为光学或 MEMS 金标实测（高阶量以 `INFERRED` 输出）
 

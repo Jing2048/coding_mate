@@ -32,6 +32,7 @@ from golfmate_algo.types import ImuPacket, SwingReport
 def analyze_swing(
     packet: ImuPacket,
     *,
+    impact_hint_s: float | None = None,
     trajectory: str = "hybrid",
     prefer_vqf: bool = False,
     use_crop_lite: bool = True,
@@ -46,6 +47,9 @@ def analyze_swing(
     trajectory :
         ``"hybrid"`` (default) varying-centre lever + event constraints + plane
         closure; ``"lever_arm"`` rigid baseline; ``"dead_reckon"`` ZUPT integrate.
+    impact_hint_s :
+        Optional collision timestamp from a higher-rate synchronized stream
+        (Apple Watch 800 Hz accelerometer). Other phases remain 200 Hz-derived.
 
     The packet is first passed through ``normalize_packet`` so Watch / glove /
     left-handed streams share one canonical lead-right anatomical frame.
@@ -63,7 +67,11 @@ def analyze_swing(
 
     # Coarse phases on raw accel (need impact shock), then CROP on rest windows
     phases_coarse, seg_coarse = detect_phases_segmental(
-        packet.t, gyro_work, accel_raw, return_diagnostics=True
+        packet.t,
+        gyro_work,
+        accel_raw,
+        impact_hint_s=impact_hint_s,
+        return_diagnostics=True,
     )
     crop_meta: dict[str, float] = {}
     if use_crop_lite:
@@ -106,7 +114,11 @@ def analyze_swing(
 
     # Final phases on corrected raw accel
     phases, seg_diag = detect_phases_segmental(
-        packet.t, gyro_c, accel_raw, return_diagnostics=True
+        packet.t,
+        gyro_c,
+        accel_raw,
+        impact_hint_s=impact_hint_s,
+        return_diagnostics=True,
     )
     from golfmate_algo.events.pro_cues import pro_hybrid_params, refine_phases_pro
 

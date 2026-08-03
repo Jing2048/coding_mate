@@ -108,6 +108,7 @@ def detect_phases_segmental(
     gyro: ArrayLike,
     accel: ArrayLike,
     *,
+    impact_hint_s: float | None = None,
     quiet_frac_hi: float = 0.10,
     quiet_frac_lo: float = 0.04,
     min_backswing_s: float = 0.15,
@@ -254,6 +255,17 @@ def detect_phases_segmental(
             impact_mode = "unavailable"
             impact_confidence = 0.15
             method = "unavailable_low_signal"
+
+    # Apple Watch preserves the native 800 Hz accelerometer as a sidecar.
+    # Its collision timestamp is more precise than the 200 Hz AHRS grid; accept
+    # a validated post-top hint while retaining all other phase logic here.
+    if impact_hint_s is not None and np.isfinite(impact_hint_s):
+        hinted = int(np.argmin(np.abs(t - float(impact_hint_s))))
+        if coarse_top < hinted <= search_hi:
+            impact_idx = hinted
+            method = "high_rate_impact_hint"
+            impact_mode = "collision"
+            impact_confidence = 1.0
 
     # --- Top: sign reversal of the signed rate before impact
     top_idx = -1

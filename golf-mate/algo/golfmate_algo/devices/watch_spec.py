@@ -1,10 +1,13 @@
-"""Apple Watch ingress contract (no Swift — specs + synthetic batches only).
+"""Apple Watch ingress contract and synthetic fixtures.
 
 Aligned with watchOS 10+ ``CMBatchedSensorManager`` (Series 8 / Ultra+):
 
 * Accelerometer up to **800 Hz**
 * Device Motion up to **200 Hz**
 * Batches delivered ~1× per second during an active HealthKit workout
+
+The native Swift adapter lives under ``golf-mate/apple`` and serializes
+``golfmate-watch-capture-v1`` for ``devices.watch_capture``.
 """
 
 from __future__ import annotations
