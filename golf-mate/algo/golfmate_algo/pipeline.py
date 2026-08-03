@@ -1,7 +1,8 @@
 """End-to-end P0/P0.5 pipeline: IMU packet -> SwingReport.
 
 Default path uses dual-path signals, CROP-lite residual bias correction,
-gated-adaptive AHRS with signed-log tilt, and hybrid constrained trajectory.
+gated-adaptive AHRS with signed-log tilt, offline endpoint SO(3) anchors,
+and hybrid constrained trajectory.
 See ``docs/research/06_zero_trust_benchmark.md`` for graded numbers.
 """
 
@@ -10,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 from golfmate_algo.ahrs import init as ahrs_init
+from golfmate_algo.ahrs.offline_smooth import smooth_endpoint_anchors
 from golfmate_algo.ahrs.suite import GatedAdaptive
 from golfmate_algo.biomechanics.proxies import estimate_biomech_proxies
 from golfmate_algo.biomechanics.sequence import sequence_proxy
@@ -18,6 +20,7 @@ from golfmate_algo.coach.diagnostics import diagnose
 from golfmate_algo.devices.normalize import normalize_packet
 from golfmate_algo.events.segmental import detect_phases_segmental
 from golfmate_algo.features.wrist import compute_wrist_features
+from golfmate_algo.math import so3
 from golfmate_algo.reference.score import reference_finding, score_against_reference
 from golfmate_algo.signal.dynamic_range import split_dual_path
 from golfmate_algo.traj.dead_reckon import reconstruct_trajectory
@@ -34,6 +37,7 @@ def analyze_swing(
     use_crop_lite: bool = True,
     use_dual_path: bool = True,
     compare_to_ideal: bool = True,
+    use_offline_smooth: bool = False,
 ) -> SwingReport:
     """Run the full analysis pipeline.
 
@@ -45,6 +49,7 @@ def analyze_swing(
 
     The packet is first passed through ``normalize_packet`` so Watch / glove /
     left-handed streams share one canonical lead-right anatomical frame.
+    Irregular timestamps are resampled to a fixed grid inside normalize.
     """
     del prefer_vqf
     packet, norm_info = normalize_packet(packet)
@@ -57,7 +62,9 @@ def analyze_swing(
     accel_ahrs = dual.accel_ahrs if dual is not None else packet.accel
 
     # Coarse phases on raw accel (need impact shock), then CROP on rest windows
-    phases_coarse = detect_phases_segmental(packet.t, gyro_work, accel_raw)
+    phases_coarse, seg_coarse = detect_phases_segmental(
+        packet.t, gyro_work, accel_raw, return_diagnostics=True
+    )
     crop_meta: dict[str, float] = {}
     if use_crop_lite:
         crop = crop_lite_correct(
@@ -98,7 +105,62 @@ def analyze_swing(
     gyro_c = gyro_work - gyro_bias
 
     # Final phases on corrected raw accel
-    phases = detect_phases_segmental(packet.t, gyro_c, accel_raw)
+    phases, seg_diag = detect_phases_segmental(
+        packet.t, gyro_c, accel_raw, return_diagnostics=True
+    )
+
+    # Offline anchors only when address is a trusted rest AND tilt is wrong.
+    # Consumer accel noise can look like a large tilt error even when the AHRS
+    # track is already within a few degrees of truth — gating prevents that.
+    smooth_meta: dict[str, float] = {}
+    if use_offline_smooth:
+        from golfmate_algo.ahrs.suite import DynamicsGate
+
+        a_idx = int(phases.address_idx)
+        lo = max(0, a_idx - max(2, int(0.04 / dt)))
+        hi = min(len(accel_raw), a_idx + max(2, int(0.04 / dt)) + 1)
+        g_win = gyro_c[lo:hi]
+        a_win = accel_raw[lo:hi]
+        g_n = float(np.mean(np.linalg.norm(g_win, axis=1)))
+        a_n = float(np.mean(np.linalg.norm(a_win, axis=1)))
+        alpha = (
+            float(np.mean(np.linalg.norm(np.diff(g_win, axis=0), axis=1) / dt))
+            if g_win.shape[0] >= 2
+            else 0.0
+        )
+        trust = DynamicsGate()(g_n, a_n, alpha)
+        R = so3.quat_to_rotmat(quats[a_idx])
+        up_b = -R.T @ so3.G_WORLD
+        up_b = up_b / (np.linalg.norm(up_b) + 1e-12)
+        a_hat = np.mean(a_win, axis=0)
+        a_hat = a_hat / (np.linalg.norm(a_hat) + 1e-12)
+        tilt_err_deg = float(
+            np.degrees(np.arccos(float(np.clip(np.dot(up_b, a_hat), -1.0, 1.0))))
+        )
+        if trust >= 0.55 and tilt_err_deg >= 4.0:
+            sm = smooth_endpoint_anchors(
+                quats,
+                gyro_c,
+                accel_raw,
+                dt,
+                address_idx=phases.address_idx,
+                finish_idx=phases.finish_idx,
+            )
+            quats = sm.quats
+            smooth_meta = {
+                "offline_smooth_applied": float(sm.applied),
+                "offline_addr_tilt_corr_deg": float(sm.addr_tilt_corr_deg),
+                "offline_fin_tilt_corr_deg": float(sm.fin_tilt_corr_deg),
+                "offline_pre_tilt_err_deg": tilt_err_deg,
+                "offline_rest_trust": trust,
+            }
+        else:
+            smooth_meta = {
+                "offline_smooth_applied": 0.0,
+                "offline_pre_tilt_err_deg": tilt_err_deg,
+                "offline_rest_trust": trust,
+                "offline_skipped_good_tilt": 1.0,
+            }
 
     traj_meta: dict[str, float] = {}
     if trajectory == "hybrid":
@@ -180,7 +242,7 @@ def analyze_swing(
         velocities=vel,
         gate_open=np.asarray(ahrs_diag.get("gate", []), dtype=np.float64),
         meta={
-            "backend": "gated_adaptive",
+            "backend": "gated_adaptive+offline_anchors",
             "trajectory": trajectory,
             "gyro_bias": np.asarray(gyro_bias, dtype=np.float64).tolist(),
             "address_init_quality": init_quality.get("quality", "unknown"),
@@ -195,6 +257,10 @@ def analyze_swing(
                 "confidence": proxies.confidence,
                 "is_proxy": True,
             },
+            "impact_mode": seg_diag.impact_mode,
+            "impact_confidence": float(seg_diag.impact_confidence),
+            "impact_method": seg_diag.method,
+            "coarse_impact_mode": seg_coarse.impact_mode,
             **ref_meta,
             "fs_hz": fs,
             "device_id": packet.frame.device_id,
@@ -213,6 +279,7 @@ def analyze_swing(
                 dual is not None and not np.allclose(accel_ahrs, accel_raw)
             ),
             **crop_meta,
+            **smooth_meta,
             **traj_meta,
         },
     )

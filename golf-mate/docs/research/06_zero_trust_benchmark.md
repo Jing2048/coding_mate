@@ -1,6 +1,6 @@
 # Golf Mate 零信任 Benchmark 报告
 
-> protocol `golfmate-zt-v1` · mode `full` · `2026-08-03T09:42:50.667347+00:00` · 306.3s · gates **PASS**
+> protocol `golfmate-zt-v1` · mode `full` · `2026-08-03T11:57:02.044492+00:00` · 324.7s · gates **PASS**
 
 ## 可信度分层（必读）
 
@@ -12,12 +12,14 @@
 | external_multisense | MultiSenseGolf 真人运动 | **可**（零信任运动分布） |
 
 ### 闸门备注
-- cross_multibody impact MAE 5.62 ms (budget 40)
-- cross_multibody position MAE 16.60 cm (budget 18)
+- cross_multibody impact MAE 5.62 ms (budget 20)
+- cross_multibody position MAE 16.60 cm (budget 17)
+- cross_multibody orientation MAE 4.01° (budget 8)
 - session gated 6.60° vs gyro_only 52.64°
 - violation residual 18.10 vs clean 5.15; invalid rate 0.0 vs 0.0
 - external_multisense scored
-- multisense (mocap-derived IMU) impact MAE 1183.1 ms — not hard-gated (no collision shock in stream); orientation 45.7°, position 130.8 cm
+- multisense (mocap-derived IMU) kinematic-impact MAE 1030.3 ms (no collision shock); orientation 10.5°, position 76.5 cm
+- external_multisense_elite unavailable: elite subjects not extracted locally; manifest lists none
 
 ## 1. 准确仿真头条（cross_multibody / E2E）
 
@@ -25,19 +27,19 @@
 |------|-------:|----------:|--------:|---------:|
 | ideal | 5.19 [3.01, 7.79] | 4.84 [4.06, 5.62] | 13.18 [12.09, 14.36] | 0.00 [0.00, 0.00] |
 | consumer | 4.01 [2.51, 5.96] | 5.47 [4.53, 6.41] | 16.60 [14.86, 18.43] | 0.00 [0.00, 0.00] |
-| harsh | 11.49 [8.97, 14.40] | 8.28 [6.72, 10.00] | 40.28 [37.05, 43.62] | 0.00 [0.00, 0.00] |
+| harsh | 11.10 [8.75, 13.83] | 14.53 [7.50, 27.03] | 40.06 [36.83, 43.32] | 0.00 [0.00, 0.00] |
 
 ## 2. 姿态对抗（cross_multibody，按挥杆均值 °）
 
 | 算法 | ideal | consumer | harsh |
 |------|------:|---------:|------:|
-| complementary | 16.14 [14.24, 18.04] | 12.38 [11.63, 13.32] | 15.39 [13.88, 16.99] |
-| ekf | 3.62 [3.30, 3.95] | 4.92 [4.46, 5.41] | 7.82 [7.04, 8.63] |
-| gated_adaptive | 9.03 [6.58, 11.49] | 2.68 [2.11, 3.76] | 10.77 [8.22, 13.91] |
-| gyro_only | 28.05 [19.43, 36.47] | 4.01 [2.17, 7.57] | 20.22 [13.22, 27.44] |
-| gyro_only+restbias | 28.08 [19.81, 36.78] | 3.76 [1.93, 7.35] | 20.04 [12.95, 27.59] |
-| madgwick | 25.11 [18.07, 32.19] | 5.04 [3.43, 8.12] | 18.16 [12.50, 24.60] |
-| mahony | 12.18 [10.79, 13.57] | 9.48 [8.89, 10.21] | 12.50 [11.55, 13.54] |
+| complementary | 16.14 [14.24, 18.10] | 12.38 [11.60, 13.24] | 15.39 [13.98, 16.95] |
+| ekf | 3.62 [3.30, 3.97] | 4.92 [4.45, 5.42] | 7.82 [7.03, 8.61] |
+| gated_adaptive | 9.03 [6.48, 11.43] | 2.68 [2.11, 3.75] | 10.77 [8.25, 13.69] |
+| gyro_only | 28.05 [19.71, 36.16] | 4.01 [2.17, 7.56] | 20.22 [13.16, 27.55] |
+| gyro_only+restbias | 28.08 [19.64, 36.63] | 3.76 [1.92, 7.33] | 20.04 [12.82, 27.98] |
+| madgwick | 25.11 [17.95, 32.10] | 5.04 [3.42, 8.10] | 18.16 [12.41, 24.43] |
+| mahony | 12.18 [10.75, 13.62] | 9.48 [8.90, 10.16] | 12.50 [11.45, 13.51] |
 
 ## 3. 会话漂移（analytic session，~24 s）
 
@@ -76,18 +78,22 @@
 | 条件 | 姿态 ° | Impact ms | 位置 cm |
 |------|-------:|----------:|--------:|
 | consumer | 21.93 [14.43, 29.95] | 6.09 [5.47, 6.88] | 11.79 [9.36, 14.33] |
-| harsh | 33.31 [23.97, 43.40] | 5.62 [5.16, 6.25] | 32.90 [26.29, 40.59] |
+| harsh | 32.84 [23.68, 42.92] | 6.09 [5.47, 6.88] | 32.66 [26.13, 40.34] |
 | ideal | 13.96 [8.06, 21.20] | 5.00 [5.00, 5.00] | 7.90 [5.40, 10.59] |
 
 ## 7. 外部零信任（MultiSenseGolf）
 
-状态：**ok** · n=30 · doi:`10.7910/DVN/LCCLLW` · Input IMU is derived from mocap joint kinematics (PN 21-bone), not a raw wrist MEMS stream. Motion distribution is external; sensor noise is not.
+状态：**ok** · n=30 · doi:`10.7910/DVN/LCCLLW` · Input IMU is derived from mocap joint kinematics (PN 21-bone), not a raw wrist MEMS stream. Adapter converts Y-up→Z-up, derives body gyro from quaternion log (rad/s), and resamples irregular timestamps. Motion distribution is external; sensor noise is not.
 
 | 指标 | mean [CI] |
 |------|----------:|
-| 姿态 ° | 45.69 [42.84, 48.61] |
-| Impact ms | 1183.08 [1032.59, 1337.38] |
-| 位置 cm | 130.85 [95.21, 173.89] |
+| 姿态 ° | 10.51 [6.10, 18.43] |
+| Impact ms | 1030.28 [923.92, 1124.50] |
+| 位置 cm | 76.49 [58.98, 99.27] |
+
+## 7b. MultiSenseGolf 高水平子集（评测闸，非产品示范库）
+
+状态：**unavailable** — elite subjects not extracted locally; manifest lists none
 
 ## 8. 退化曲线（会话，gated vs gyro_only）
 

@@ -319,6 +319,7 @@ def _score_multisense(
     ori: list[float] = []
     impact: list[float] = []
     pos: list[float] = []
+    impact_modes: list[str] = []
     fails = 0
     n = 0
     for case in msg.iter_local_swings(max_swings=max_swings, subjects=subjects):
@@ -330,15 +331,20 @@ def _score_multisense(
             continue
         fs = case.packet.frame.fs_hz
         impact.append(abs(report.phases.impact_idx - case.impact_idx) / fs * 1000.0)
+        # Full overlapping record after yaw alignment (address→finish window can
+        # amplify errors when phase labels sit on residual motion).
         nq = min(report.quats.shape[0], case.quats_ref.shape[0])
         aligned = _yaw_align(report.quats[:nq], case.quats_ref[:nq], 0)
         ori.append(float(np.mean(orientation_error_deg(aligned, case.quats_ref[:nq]))))
-        np_ = min(report.positions.shape[0], case.positions_ref.shape[0])
-        truth = case.positions_ref[:np_] - case.positions_ref[0]
+        truth = case.positions_ref[:nq] - case.positions_ref[0]
         pos_e = _yaw_rotate_positions(
-            report.positions[:np_], report.quats[:np_], case.quats_ref[:np_], 0
+            report.positions[:nq],
+            report.quats[:nq],
+            case.quats_ref[:nq],
+            0,
         )
         pos.append(float(np.mean(np.linalg.norm(pos_e - truth, axis=1) * 100.0)))
+        impact_modes.append(str(report.meta.get("impact_mode", "unknown")))
 
     if n == 0:
         return {
@@ -362,10 +368,16 @@ def _score_multisense(
         "impact_ms": _sum_dict(summarize(impact, n_boot=n_boot, seed=61)),
         "position_cm": _sum_dict(summarize(pos, n_boot=n_boot, seed=62)),
         "events": {"impact": _sum_dict(summarize(impact, n_boot=n_boot, seed=61))},
+        "impact_mode_counts": {
+            m: int(sum(1 for x in impact_modes if x == m))
+            for m in sorted(set(impact_modes))
+        },
         "credibility": "external_real_motion_mocap_derived_imu",
         "caveat": (
             "Input IMU is derived from mocap joint kinematics (PN 21-bone), not a "
-            "raw wrist MEMS stream. Motion distribution is external; sensor noise is not."
+            "raw wrist MEMS stream. Adapter converts Y-up→Z-up, derives body gyro "
+            "from quaternion log (rad/s), and resamples irregular timestamps. "
+            "Motion distribution is external; sensor noise is not."
             + (
                 " Elite subset is an eval gate only — not an in-product posture library."
                 if subjects

@@ -79,12 +79,22 @@ Adapters (Watch / glove) fill the **device** frame; algo owns mirroring.
 
 ## Headline numbers
 
+Citeable `cross_multibody` E2E (zero-trust protocol; see `docs/research/06_zero_trust_benchmark.md`):
+
 | Metric | ideal | consumer | harsh |
 |--------|------:|---------:|------:|
-| Orientation, single swing (deg) | 1.15 | 3.76 | 11.59 |
-| Orientation, 24 s session (deg) | - | 6.05 | 6.46 |
-| Wrist position (cm) | 2.00 | 4.01 | 13.97 |
-| Impact timing (ms) | 5.0 | 6.3 | 5.4 |
+| Orientation E2E (deg) | 5.2 | 4.0 | 11.1 |
+| Impact timing (ms) | 4.8 | 5.5 | 14.5 |
+| Wrist position E2E (cm) | 13.2 | 16.6 | 40.1 |
+| Session gated vs gyro (deg) | — | 6.6 / 52.6 | 6.9 / 77.3 |
+
+External MultiSenseGolf (mocap-derived IMU, after adapter repair): orientation ~**10.5°** mean
+(was ~46° with broken deg2rad / Y-up / irregular-`dt`). Impact remains a kinematic
+proxy (~1 s MAE) — no club–ball shock in that stream. Position ~76 cm reflects
+root-relative hand translation outside the rigid lever model.
+
+Beyond-consumer hard gates: impact ≤20 ms, position ≤17 cm, orientation ≤8° on
+`cross_multibody` consumer.
 
 ## Honesty
 

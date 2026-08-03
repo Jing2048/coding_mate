@@ -62,6 +62,8 @@ def estimate_lever_arm(
     ridge: float = 1e-6,
     rank_tol: float = 1e-2,
     max_residual_m_s2: float = 25.0,
+    active_slice: tuple[int, int] | None = None,
+    huber_delta: float = 0.0,
 ) -> LeverArmResult:
     """Least-squares solve for the body-fixed lever arm and rebuild the path.
 
@@ -89,6 +91,22 @@ def estimate_lever_arm(
         w_mag = np.linalg.norm(gyro, axis=1)
         weight = w_mag**2 + np.linalg.norm(alpha, axis=1)
     weight = np.asarray(weight, dtype=np.float64).reshape(-1)
+    # Optional phase window (e.g. top→finish): outside → near-zero weight.
+    if active_slice is not None:
+        lo, hi = active_slice
+        lo = int(np.clip(lo, 0, n))
+        hi = int(np.clip(hi, lo + 1, n))
+        mask = np.zeros(n, dtype=np.float64)
+        mask[lo:hi] = 1.0
+        # Soft shoulders so the window edge is not a hard discontinuity.
+        shoulder = max(1, int(0.03 / max(dt, 1e-6)))
+        for k in range(shoulder):
+            a = (k + 1) / (shoulder + 1)
+            if lo - shoulder + k >= 0:
+                mask[lo - shoulder + k] = max(mask[lo - shoulder + k], a)
+            if hi + k < n:
+                mask[hi + k] = max(mask[hi + k], 1.0 - a)
+        weight = weight * mask
     weight = weight / (np.max(weight) + 1e-12)
 
     A = np.zeros((3 * n, 3), dtype=np.float64)
@@ -117,6 +135,34 @@ def estimate_lever_arm(
     s_inv = np.zeros_like(s)
     s_inv[keep] = 1.0 / (s[keep] + ridge * s_max)
     L = Vt.T @ (s_inv * (U.T @ b))
+
+    # One IRLS Huber reweight pass: down-weight samples that violate rigidity.
+    if huber_delta > 0 and np.any(weight > 0):
+        resid_v = (A @ L - b).reshape(-1, 3)
+        r_n = np.linalg.norm(resid_v, axis=1)
+        w_h = np.ones(n, dtype=np.float64)
+        big = r_n > huber_delta
+        w_h[big] = huber_delta / (r_n[big] + 1e-12)
+        weight2 = weight * w_h
+        weight2 = weight2 / (np.max(weight2) + 1e-12)
+        for i in range(n):
+            sw = np.sqrt(weight2[i])
+            # Rebuild rows (Ai, bi already scaled by old sw — redo from scratch)
+            R = so3.quat_to_rotmat(quats[i])
+            Sw = _skew(gyro[i])
+            Sa = _skew(alpha[i])
+            Ai = Sw @ Sw + Sa
+            bi = accel[i] + R.T @ so3.G_WORLD
+            A[3 * i : 3 * i + 3, :] = sw * Ai
+            b[3 * i : 3 * i + 3] = sw * bi
+        U, s, Vt = np.linalg.svd(A, full_matrices=False)
+        s_max = float(s[0]) if s.size else 0.0
+        tol = max(rank_tol * s_max, 1e-12)
+        keep = s > tol
+        s_inv = np.zeros_like(s)
+        s_inv[keep] = 1.0 / (s[keep] + ridge * s_max)
+        L = Vt.T @ (s_inv * (U.T @ b))
+
     rank = int(np.count_nonzero(keep))
     cond = float(s_max / s[keep][-1]) if rank else float("inf")
     unobservable = Vt[rank:] if rank < 3 else np.zeros((0, 3), dtype=np.float64)

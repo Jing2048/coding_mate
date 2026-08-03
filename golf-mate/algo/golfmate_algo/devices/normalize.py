@@ -8,7 +8,7 @@ import numpy as np
 
 from golfmate_algo.devices.mirror import apply_linear_map, mirror_matrix, needs_mirror
 from golfmate_algo.math import so3
-from golfmate_algo.signal.resample import resample_packet
+from golfmate_algo.signal.resample import ensure_fixed_rate_packet, resample_packet
 from golfmate_algo.types import Handedness, ImuPacket, SensorFrame, WristSide
 
 _IDENTITY_QUAT = (1.0, 0.0, 0.0, 0.0)
@@ -83,6 +83,18 @@ def normalize_packet(
                 already_canonical=True,
             )
             return out, info
+        out, jitter_rs = ensure_fixed_rate_packet(packet)
+        if jitter_rs:
+            info = NormalizationInfo(
+                applied_extrinsic=False,
+                applied_mirror=False,
+                applied_resample=True,
+                source_handedness=info.source_handedness,
+                source_wrist=info.source_wrist,
+                source_device_id=info.source_device_id,
+                already_canonical=True,
+            )
+            return out, info
         return packet, info
 
     gyro = np.asarray(packet.gyro, dtype=np.float64).copy()
@@ -131,6 +143,11 @@ def normalize_packet(
         gyro=gyro,
         accel=accel,
     )
+    # Irregular timestamps (mocap / BLE jitter) must not reach strapdown with a
+    # single median dt — enforce a true fixed-rate grid.
+    out, jitter_rs = ensure_fixed_rate_packet(out, target_fs_hz=target_fs_hz)
+    applied_rs = applied_rs or jitter_rs
+    fs = float(out.frame.fs_hz)
     info = NormalizationInfo(
         applied_extrinsic=applied_ext,
         applied_mirror=applied_mir,

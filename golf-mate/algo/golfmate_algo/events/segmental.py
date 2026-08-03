@@ -40,6 +40,8 @@ class SegmentationDiagnostics:
     impact_score: ArrayF
     method: str
     quality: dict[str, float]
+    impact_mode: str = "collision"  # collision | kinematic_proxy | unavailable
+    impact_confidence: float = 1.0
 
 
 def _moving_average(x: ArrayF, win: int) -> ArrayF:
@@ -145,20 +147,43 @@ def detect_phases_segmental(
     motion_start = int(np.argmax(active))
     motion_end = n - 1 - int(np.argmax(active[::-1]))
 
-    # --- Impact: strongest broadband transient anywhere in the motion span.
-    # The window is deliberately not restricted to high angular rate: an early
-    # release ("casting") swing has low wrist rate at impact yet still strikes.
+    # --- Impact: collision shock when SNR allows; else kinematic proxy.
+    # Collision = broadband mechanical transient (club–ball). Mocap-derived /
+    # low-ODR streams lack that shock — do NOT silently rename peak-ω as impact
+    # without labelling the semantic change.
     search_lo = max(0, motion_start - int(0.05 * fs))
     search_hi = min(n - 1, motion_end + int(0.10 * fs))
     seg = impact_score[search_lo : search_hi + 1]
     method = "transient"
+    impact_mode = "collision"
+    impact_confidence = 1.0
     noise_floor = float(np.median(impact_score)) + 1e-9
-    if seg.size and float(np.max(seg)) > 4.0 * noise_floor:
+    snr = float(np.max(seg) / noise_floor) if seg.size else 0.0
+    # Need usable bandwidth for a strike transient (~>80 Hz Nyquist ⇒ fs≳160).
+    collision_feasible = fs >= 120.0 and snr > 4.0
+    if seg.size and collision_feasible:
         impact_idx = search_lo + int(np.argmax(seg))
+        impact_confidence = float(np.clip((snr - 4.0) / 8.0, 0.35, 1.0))
     else:
-        # Degraded: no clean shock (clipped accel, low ODR). Fall back to rate peak.
-        impact_idx = int(np.argmax(omega))
-        method = "peak_omega_fallback"
+        # Kinematic proxy: after the likely top, blend |ω| with |a|.
+        # In a real downswing, centripetal |a| and rate both rise toward impact.
+        top_guess = int(np.argmin(np.abs(signed[: max(1, int(0.7 * n))])))
+        lo_k = max(top_guess + 1, motion_start)
+        hi_k = min(n - 1, motion_end + 1)
+        if hi_k <= lo_k:
+            lo_k, hi_k = motion_start, max(motion_start + 1, motion_end)
+        acc_mag = np.linalg.norm(accel, axis=1)
+        kin = 0.55 * (omega / (peak_omega + 1e-9)) + 0.45 * (
+            acc_mag / (float(np.max(acc_mag)) + 1e-9)
+        )
+        impact_idx = lo_k + int(np.argmax(kin[lo_k : hi_k + 1]))
+        method = "kinematic_proxy"
+        impact_mode = "kinematic_proxy"
+        impact_confidence = 0.45 if fs < 120.0 else 0.55
+        if snr <= 1.5 and peak_omega < 1.0:
+            impact_mode = "unavailable"
+            impact_confidence = 0.15
+            method = "unavailable_low_signal"
 
     # --- Top: sign reversal of the signed rate before impact
     peak_idx = int(np.argmax(omega))
@@ -214,7 +239,11 @@ def detect_phases_segmental(
                 ),
                 "quiet_hi": hi,
                 "quiet_lo": lo,
+                "impact_confidence": float(impact_confidence),
+                "fs_hz": float(fs),
             },
+            impact_mode=impact_mode,
+            impact_confidence=float(impact_confidence),
         )
         return phases, diag
     return phases

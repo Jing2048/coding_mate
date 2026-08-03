@@ -61,7 +61,13 @@
 
 ### Canonical Frame（多设备解耦）
 
-客户端只填设备安装系 IMU，并如实设置 `handedness` / `wrist` / `mount_extrinsic`。`normalize_packet` 负责外参、左右镜像与幂等 `is_canonical` 标记；其后算法一律在右打领先腕解剖系下运行。
+客户端只填设备安装系 IMU，并如实设置 `handedness` / `wrist` / `mount_extrinsic`。`normalize_packet` 负责外参、左右镜像、不规则时间戳固定网格与幂等 `is_canonical` 标记；其后算法一律在右打领先腕解剖系下运行。
+
+### 真实误差评测纪律
+
+- **可引用精度**来自 `cross_multibody`（独立生成器 + consumer 噪声），闸门严于旧消费级预算（impact ≤20 ms / position ≤17 cm / orientation ≤8°）。
+- **MultiSenseGolf** 是外部真人运动分布闸，不是原始腕表 MEMS：必须 Y-up→Z-up、角速度按 rad/s、先 SLERP 再 SO(3) 求导；冲击在无碰撞瞬态时标记为 `kinematic_proxy`，禁止静默当作击球冲击精度。
+- 离线 endpoint SO(3) 锚点仅作可选模块：在地址倾斜已可靠时默认关闭，避免用噪声 accel「纠正」已经正确的姿态。
 
 ### P2（接口预留）
 

@@ -200,13 +200,14 @@ def estimate_hybrid_trajectory(
             meta={"reason_short_series": 1.0},
         )
 
+    addr = int(np.clip(phases.address_idx, 0, n - 1))
+    top = int(np.clip(phases.top_idx, 0, n - 1))
+    fin = int(np.clip(phases.finish_idx, 0, n - 1))
+
     rigid = estimate_lever_arm(quats, gyro, accel, dt)
     L = rigid.lever_arm_body.copy()
     resid_rms = float(rigid.residual_rms_m_s2)
     rank = int(rigid.rank)
-    addr = int(np.clip(phases.address_idx, 0, n - 1))
-    top = int(np.clip(phases.top_idx, 0, n - 1))
-    fin = int(np.clip(phases.finish_idx, 0, n - 1))
 
     pos_rel = np.zeros((n, 3), dtype=np.float64)
     vel_kin = np.zeros((n, 3), dtype=np.float64)
