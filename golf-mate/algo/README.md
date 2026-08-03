@@ -105,9 +105,10 @@ Beyond-consumer hard gates: impact ≤20 ms, position ≤17 cm, orientation ≤8
 
 ## Honesty
 
-Single-wrist P0 reports proxy metrics with stated uncertainty. Absolute clubface
-angle, true club path and full-body kinematic sequence are not observable from
-one wrist node and are deliberately not claimed. The lever-arm trajectory numbers
-are an upper bound: the synthetic swing satisfies the rigid-rotation assumption
-exactly, and the solver reports its own residual so the assumption can be checked
-on real data.
+Single-wrist P0 still reports many **proxy** metrics with stated uncertainty.
+High-order quantities — lead-wrist FE/RU, clubface open/closed, shaft lean,
+X-factor, and pelvis→club sequence — are produced by phase-anchored PCR
+(`golfmate_algo.infer.high_order`) and labeled ``MetricKind.INFERRED`` with
+residual-based confidence. They are **not** launch-monitor or dual-IMU
+HackMotion measurements. The lever-arm trajectory numbers remain an upper bound
+under the rigid-rotation assumption; the solver reports its own residual.

@@ -85,12 +85,12 @@
 - 腕姿态、节奏、冲击时刻、平面与路径代理、相对 Address 的 segment twist/swing 通道
 - Release 形态学与相对专业波形流形的分布距离（均为代理，带 confidence/validity）
 - 基于规则的改进提示，并标注为代理/不确定度
+- **高阶推断（`MetricKind.INFERRED`）**：杆面开闭、腕 FE/RU、shaft lean、X-factor、pelvis→club 序列——来自相位锚定 PCR 潜变量模型（`infer/high_order.py`），带 residual/confidence/validity；**不是** launch monitor 实测，也不是 HackMotion 双刚体直接测量
 
-**不可声称（单腕 P0）：**
+**不可声称（单腕）：**
 
-- 绝对杆面角 / 真实 Club Path / shaft lean（无杆头或多段观测）
-- 真实腕关节角（HackMotion 需要手+前臂双刚体）
-- 厘米级全身关节角 / 完整 pelvis→club 运动学序列
+- 将 INFERRED 杆面/腕角伪称为 MEMS 或光学金标实测
+- 厘米级光学全身关节角（无 mocap 标定）
 - 「唯一正确挥杆」模板（流形是分布，不是单点姿势）
 
 ---
@@ -121,10 +121,24 @@
 | 平移中心合成 | `SwingConfig.center_sway/lift` | 让 hybrid 可测 sway |
 | Casting 可观测 | `casting_swing` mount=3 | 前臂安装看不到远端 casting |
 | 高动态事件细化 | `events/pro_cues.py` | peak ω≥12 rad/s 才启用 |
+| 高阶 PCR（腕 FE/RU、杆面、序列） | `infer/high_order.py` + `high_order_weights.json` | `INFERRED`；相位锚定 PCR + impact 标量精修 |
 
-仍明确推迟：latent 全身 PCR、batch MAP smoother、真实多刚体空间 DoF、原始表盘 MEMS gold set。
+仍明确推迟：batch MAP smoother、真实多刚体全空间 DoF、原始表盘 MEMS gold set（用于校准 PCR 域差）。
 
 更高价值 golden / 外部闸门清单见 `docs/research/07_golden_sources.md`（MultiSense 分层、CMU-64、SciRep 预算、WIT-KinNet stub、robust synth regimes）。
+
+---
+
+## 7b. 高阶推断方法（WIT-KinNet / Lauer 紧凑形）
+
+单远端节点无法「直接看见」第二块腕骨或杆面传感器。做法是：
+
+1. 多刚体 oracle 提供 FE / face / pelvis→club 解析标签；FE·face 角速度耦合进远端 gyro（可观测 DoF）
+2. 事件锚定相位归一化后，对 ω、体轴 gx/gy/gz、twist/swing 通道做 PCA
+3. 在得分空间做岭回归 → 目标波形；另用下杆积分特征精修 impact FE/face
+4. 运行时输出 `kind=inferred` + reconstruction residual → confidence/validity
+
+这是产品层可宣称的高阶建模，诚实标签是 **INFERRED**，不是「未建模所以不声称」。
 
 ---
 

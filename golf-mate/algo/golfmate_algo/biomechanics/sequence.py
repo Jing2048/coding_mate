@@ -25,7 +25,8 @@ class SequenceProxy:
     twist_peak_to_impact_s: float = float("nan")
     lag_proxy_s: float = float("nan")  # twist_peak − plane_peak (positive = twist later)
     note: str = (
-        "Full pelvis→torso→arm→club sequence requires multi-IMU or learned mapping (P1)."
+        "Single-node ω peak is a degraded proxy; full pelvis→torso→arm→club "
+        "sequence is available via infer.high_order (MetricKind.INFERRED)."
     )
 
 

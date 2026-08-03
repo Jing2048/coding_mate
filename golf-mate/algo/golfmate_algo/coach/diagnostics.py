@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from golfmate_algo.types import DiagnosticFinding, WristFeatures
 
 
@@ -11,6 +13,7 @@ def diagnose(
     features: WristFeatures,
     *,
     pro: dict[str, Any] | None = None,
+    high_order: dict[str, Any] | None = None,
 ) -> list[DiagnosticFinding]:
     findings: list[DiagnosticFinding] = []
 
@@ -175,6 +178,97 @@ def diagnose(
                             "residual": float(man.get("residual", float("nan"))),
                         },
                         is_proxy=True,
+                    )
+                )
+
+    # High-order inferred wrist / clubface / sequence (PCR latent body)
+    if high_order and high_order.get("kind") == "inferred":
+        conf = float(high_order.get("confidence", 0.0))
+        wrist = high_order.get("wrist") or {}
+        club = high_order.get("club") or {}
+        body = high_order.get("body") or {}
+        if conf >= 0.35:
+            fe_imp = float(wrist.get("fe_impact_deg", float("nan")))
+            fe_d = float(wrist.get("fe_delta_address_to_impact_deg", float("nan")))
+            if np.isfinite(fe_d) and fe_d < -5.0:
+                findings.append(
+                    DiagnosticFinding(
+                        code="wrist_extends_into_impact",
+                        severity="warn",
+                        message=(
+                            "Inferred lead wrist adds extension into impact "
+                            "(cupping tendency; PCR latent model)."
+                        ),
+                        evidence={
+                            "fe_impact_deg": fe_imp,
+                            "fe_delta_deg": fe_d,
+                            "confidence": conf,
+                        },
+                        is_proxy=False,
+                    )
+                )
+            elif np.isfinite(fe_d) and fe_d > 8.0:
+                findings.append(
+                    DiagnosticFinding(
+                        code="wrist_bows_into_impact",
+                        severity="info",
+                        message=(
+                            "Inferred lead wrist flexes/bows into impact "
+                            "(PCR latent model)."
+                        ),
+                        evidence={
+                            "fe_impact_deg": fe_imp,
+                            "fe_delta_deg": fe_d,
+                            "confidence": conf,
+                        },
+                        is_proxy=False,
+                    )
+                )
+
+            face_state = str(club.get("face_open_closed", "square"))
+            face_deg = float(club.get("face_impact_deg", float("nan")))
+            if face_state == "open" and conf >= 0.4:
+                findings.append(
+                    DiagnosticFinding(
+                        code="clubface_open_impact",
+                        severity="warn",
+                        message=(
+                            "Inferred clubface is open at impact "
+                            "(single-IMU PCR; not a launch-monitor reading)."
+                        ),
+                        evidence={"face_impact_deg": face_deg, "confidence": conf},
+                        is_proxy=False,
+                    )
+                )
+            elif face_state == "closed" and conf >= 0.4:
+                findings.append(
+                    DiagnosticFinding(
+                        code="clubface_closed_impact",
+                        severity="info",
+                        message=(
+                            "Inferred clubface is closed at impact "
+                            "(single-IMU PCR; not a launch-monitor reading)."
+                        ),
+                        evidence={"face_impact_deg": face_deg, "confidence": conf},
+                        is_proxy=False,
+                    )
+                )
+
+            if body.get("sequence_order_ok") is False and conf >= 0.35:
+                findings.append(
+                    DiagnosticFinding(
+                        code="kinematic_sequence_out_of_order",
+                        severity="warn",
+                        message=(
+                            "Inferred pelvis→torso→arm→club peak order looks "
+                            "out of sequence (PCR latent model)."
+                        ),
+                        evidence={
+                            "pelvis_peak_to_impact_s": body.get("pelvis_peak_to_impact_s"),
+                            "club_peak_to_impact_s": body.get("club_peak_to_impact_s"),
+                            "confidence": conf,
+                        },
+                        is_proxy=False,
                     )
                 )
 

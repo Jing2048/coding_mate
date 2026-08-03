@@ -130,7 +130,7 @@ MultiSenseGolf（mocap-derived IMU，n=30）：姿态 ~45°、位置 ~46 cm；Im
 |------|----------|-----------|
 | 冲击时刻 | Golfshot Swing ID | 高通瞬态，consumer **6.1 ms** @200 Hz |
 | 相位/节奏 | Blast、Garmin TruSwing | Address/Top/Impact/Finish，≤10 ms |
-| 腕角语言 | HackMotion | 相对 address 的代理量，**不伪称绝对杆面角** |
+| 腕角语言 | HackMotion | 相对 address 的 **INFERRED** FE/RU（PCR）；非双刚体实测 |
 | 全身序列 | Sportsbox、Xsens | 单节点不可观测，显式降级为腕部代理 |
 | 轨迹 | Sci. Rep. 2024 ~17 cm | 刚性杠杆解，合成上界 ~5 cm；真实需实测闸门 |
 

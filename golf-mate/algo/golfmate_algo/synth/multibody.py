@@ -284,6 +284,13 @@ class SwingConfig:
     # Vertical lift/settle of the base during transition (m).
     center_lift_amp_m: float = 0.0
 
+    # Distal wrist FE + face roll command envelopes (coupled into IMU gyro).
+    # Coaching degrees: +FE = bow/flexion, −FE = cup/extension (HackMotion flipped).
+    wrist_fe_top_deg: float = -18.0
+    wrist_fe_impact_deg: float = 15.0
+    clubface_open_impact_deg: float = 0.0  # + open, − closed at impact
+    clubface_open_top_deg: float = 8.0
+
     def total_s(self) -> float:
         return (
             self.address_s
@@ -360,10 +367,34 @@ class SwingTruth:
         ph.validate_order()
         return ph
 
-    def to_imu_packet(self) -> ImuPacket:
-        """Package the measured sensor signals as an :class:`ImuPacket`."""
-        gyro = self.gyro_body
+    def to_imu_packet(self, *, couple_high_order: bool = False) -> ImuPacket:
+        """Package the measured sensor signals as an :class:`ImuPacket`.
+
+        ``couple_high_order`` injects wrist-FE / clubface command rates into the
+        distal gyro so those DoFs are observable (WIT-KinNet-style supervision).
+        Body axes: FE → local X (flexion/extension), face → local Z (shaft-axial
+        open/closed). Default False keeps rigid-oracle gyro for self-consistency
+        tests; high-order PCR training and eval should pass True.
+        """
+        gyro = self.gyro_body.copy()
         accel = self.accel_body
+        if couple_high_order:
+            fe = np.asarray(self.meta.get("wrist_fe_cmd_rad", []), dtype=np.float64)
+            face = np.asarray(self.meta.get("clubface_cmd_rad", []), dtype=np.float64)
+            if fe.size == gyro.shape[0] and face.size == gyro.shape[0]:
+                dt = self.dt if self.dt > 0 else 1e-3
+                # Distal mounts see nearly full articular rates; proximal less so.
+                couple = 1.0 if int(self.config.mount_segment) >= 2 else 0.65
+                fe_rate = np.gradient(fe, dt)
+                face_rate = np.gradient(face, dt)
+                # Mild low-pass on injected rates so impact ω peak stays dominant.
+                if fe_rate.size >= 5:
+                    k = np.array([0.15, 0.2, 0.3, 0.2, 0.15], dtype=np.float64)
+                    fe_rate = np.convolve(fe_rate, k, mode="same")
+                    face_rate = np.convolve(face_rate, k, mode="same")
+                gyro = gyro + couple * np.column_stack(
+                    [fe_rate, 0.35 * face_rate, face_rate]
+                )
         handed = self.config.handedness
         if handed == Handedness.LEFT:
             from golfmate_algo.devices.mirror import apply_linear_map, mirror_matrix
@@ -384,6 +415,50 @@ class SwingTruth:
         """True iff downswing speed peaks occur in proximal->distal time order."""
         times = self.seg_peak_speed_time
         return bool(np.all(np.diff(times) > 0.0))
+
+    def high_order_truth(self) -> dict[str, ArrayF | float]:
+        """Analytic high-order labels used to train the single-node inferencer.
+
+        Wrist FE and clubface are commanded envelopes (injectable into IMU gyro
+        via ``to_imu_packet(couple_high_order=True)``). RU hinge is the planar
+        arm→club lag. Body angles are the multibody plane rotations. Wrist/face
+        series are address-relative.
+        """
+        n = self.t.shape[0]
+        addr = int(self.address_idx)
+        fe = np.asarray(self.meta.get("wrist_fe_cmd_rad", np.zeros(n)), dtype=np.float64)
+        face = np.asarray(self.meta.get("clubface_cmd_rad", np.zeros(n)), dtype=np.float64)
+        if fe.shape[0] != n:
+            fe = np.zeros(n)
+        if face.shape[0] != n:
+            face = np.zeros(n)
+        # Planar lag / hinge ≈ radial-ulnar cocking proxy
+        ru = np.asarray(self.seg_angle_rad[3] - self.seg_angle_rad[2], dtype=np.float64)
+        ru = ru - ru[addr]
+        # Forearm PS proxy: distal axial content co-varies with commanded face
+        ps = 0.55 * face.copy()
+        # Shaft lean from club plane angle vs vertical (approx via plane tilt)
+        lean = np.asarray(self.seg_angle_rad[3], dtype=np.float64) * np.sin(
+            np.deg2rad(self.config.plane_tilt_deg)
+        )
+        lean = lean - lean[addr]
+
+        return {
+            "wrist_fe_rad": fe.copy(),
+            "wrist_ru_rad": ru.astype(np.float64),
+            "forearm_ps_rad": ps,
+            "clubface_rad": face.copy(),
+            "shaft_lean_rad": lean.astype(np.float64),
+            "x_factor_rad": np.asarray(self.x_factor_rad, dtype=np.float64),
+            "pelvis_angle_rad": np.asarray(self.seg_angle_rad[0], dtype=np.float64),
+            "torso_angle_rad": np.asarray(self.seg_angle_rad[1], dtype=np.float64),
+            "arm_angle_rad": np.asarray(self.seg_angle_rad[2], dtype=np.float64),
+            "club_angle_rad": np.asarray(self.seg_angle_rad[3], dtype=np.float64),
+            "fe_address_rad": float(fe[addr]),
+            "fe_impact_rad": float(fe[self.impact_idx]),
+            "clubface_impact_rad": float(face[self.impact_idx]),
+            "shaft_lean_impact_rad": float(lean[self.impact_idx]),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +659,43 @@ def build_swing(config: Optional[SwingConfig] = None) -> SwingTruth:
         gyro_body[i] = R_sensor.T @ om_m[i]
         accel_body[i] = R_sensor.T @ (sensor_acc[i] - g_world)
 
+    # --- High-order wrist FE / clubface command envelopes (address-relative) --
+    # Stored for GT + optional IMU coupling in ``to_imu_packet`` (does NOT mutate
+    # the rigid kinematic gyro used by oracle self-consistency tests).
+    t_bs0 = float(cfg.address_s)
+    t_top_e = float(cfg.address_s + cfg.backswing_s)
+    t_imp_e = t_top_e + float(cfg.downswing_s)
+    t_fin_e = t_imp_e + float(cfg.followthrough_s)
+
+    def _env_cmd(v_top: float, v_imp: float, v_fin: float) -> ArrayF:
+        out = np.zeros(n, dtype=np.float64)
+        for i, tt in enumerate(t):
+            if tt <= t_bs0:
+                out[i] = 0.0
+            elif tt <= t_top_e:
+                u = (tt - t_bs0) / max(t_top_e - t_bs0, 1e-9)
+                out[i] = u * v_top
+            elif tt <= t_imp_e:
+                u = (tt - t_top_e) / max(t_imp_e - t_top_e, 1e-9)
+                out[i] = (1 - u) * v_top + u * v_imp
+            elif tt <= t_fin_e:
+                u = (tt - t_imp_e) / max(t_fin_e - t_imp_e, 1e-9)
+                out[i] = (1 - u) * v_imp + u * v_fin
+            else:
+                out[i] = v_fin
+        return out
+
+    fe_cmd = _env_cmd(
+        float(np.deg2rad(cfg.wrist_fe_top_deg)),
+        float(np.deg2rad(cfg.wrist_fe_impact_deg)),
+        float(np.deg2rad(cfg.wrist_fe_impact_deg)) * 0.4,
+    )
+    face_cmd = _env_cmd(
+        float(np.deg2rad(cfg.clubface_open_top_deg)),
+        float(np.deg2rad(cfg.clubface_open_impact_deg)),
+        float(np.deg2rad(cfg.clubface_open_impact_deg)) * 0.5,
+    )
+
     # --- club head ----------------------------------------------------------
     club_head_pos = origin_pos[n_seg]
     club_head_vel = origin_vel[n_seg]
@@ -624,6 +736,8 @@ def build_swing(config: Optional[SwingConfig] = None) -> SwingTruth:
         "center_path_span_m": float(
             np.max(np.linalg.norm(origin_pos[0] - origin_pos[0, 0], axis=1))
         ),
+        "wrist_fe_cmd_rad": fe_cmd,
+        "clubface_cmd_rad": face_cmd,
     }
     for s in range(n_seg):
         meta[f"peak_speed_{SEGMENT_NAMES[s]}_deg_s"] = float(seg_peak_speed[s] * _RAD2DEG)

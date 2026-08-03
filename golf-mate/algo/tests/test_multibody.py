@@ -142,3 +142,5 @@ def test_imu_packet_roundtrip():
     assert pkt.t.shape[0] == tr.t.shape[0]
     assert np.allclose(pkt.gyro, tr.gyro_body)
     assert np.allclose(pkt.accel, tr.accel_body)
+    pkt_c = tr.to_imu_packet(couple_high_order=True)
+    assert not np.allclose(pkt_c.gyro, tr.gyro_body)

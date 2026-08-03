@@ -258,7 +258,18 @@ def analyze_swing(
         twist_rate=pro.channels.twist_rate_rad_s,
     )
     pro_dict = pro.as_dict()
-    findings = diagnose(features, pro=pro_dict)
+
+    from golfmate_algo.infer.high_order import infer_high_order
+
+    high = infer_high_order(
+        packet.t,
+        gyro_c,
+        quats,
+        phases,
+        channel_kind=channel_kind,
+    )
+    high_dict = high.as_dict() if high is not None else None
+    findings = diagnose(features, pro=pro_dict, high_order=high_dict)
 
     ref_meta: dict = {}
     if compare_to_ideal:
@@ -292,7 +303,7 @@ def analyze_swing(
         velocities=vel,
         gate_open=np.asarray(ahrs_diag.get("gate", []), dtype=np.float64),
         meta={
-            "backend": "gated_adaptive+pro_swing_model",
+            "backend": "gated_adaptive+pro_swing+high_order_pcr",
             "trajectory": trajectory,
             "gyro_bias": np.asarray(gyro_bias, dtype=np.float64).tolist(),
             "address_init_quality": init_quality.get("quality", "unknown"),
@@ -311,6 +322,7 @@ def analyze_swing(
                 "is_proxy": True,
             },
             "pro_swing": pro_dict,
+            "high_order": high_dict,
             "impact_mode": seg_diag.impact_mode,
             "impact_confidence": float(seg_diag.impact_confidence),
             "impact_method": seg_diag.method,
