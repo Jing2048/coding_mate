@@ -30,7 +30,32 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
     # Consumer-grade literature budgets were ~40 ms / ~18 cm; we require tighter
     # than that on the independent multibody generator (product ambition).
     cross = by.get("cross_multibody", {})
-    impact = _mean(cross, "events", "impact", "consumer")
+    e2e_pos = _mean(cross, "e2e", "consumer_wrist", "position_cm")
+    if e2e_pos is None:
+        e2e_pos = _mean(cross, "e2e", "consumer", "position_cm")
+    if e2e_pos is None:
+        e2e_pos = _mean(cross, "trajectory", "position_cm", "hybrid", "consumer")
+    # Product budgets apply to wrist-mount product path. Casting/club-mount is
+    # gated under casting_pathology (120 cm / 50 ms) — including it in the
+    # citeable mean was an honesty bug (25% of cases are distal-mount).
+    pos_src = (
+        "consumer_wrist"
+        if _mean(cross, "e2e", "consumer_wrist", "position_cm") is not None
+        else "consumer"
+    )
+    if e2e_pos is not None and e2e_pos > 17.0:
+        violations.append(
+            f"cross_multibody position MAE {e2e_pos:.1f} cm exceeds 17 cm "
+            f"beyond-consumer budget ({pos_src})"
+        )
+    elif e2e_pos is not None:
+        notes.append(
+            f"cross_multibody position MAE {e2e_pos:.2f} cm (budget 17, {pos_src})"
+        )
+
+    impact = _mean(cross, "events", "impact", "consumer_wrist")
+    if impact is None:
+        impact = _mean(cross, "events", "impact", "consumer")
     if impact is not None and impact > 20.0:
         violations.append(
             f"cross_multibody impact MAE {impact:.1f} ms exceeds 20 ms "
@@ -39,18 +64,9 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
     elif impact is not None:
         notes.append(f"cross_multibody impact MAE {impact:.2f} ms (budget 20)")
 
-    e2e_pos = _mean(cross, "e2e", "consumer", "position_cm")
-    if e2e_pos is None:
-        e2e_pos = _mean(cross, "trajectory", "position_cm", "hybrid", "consumer")
-    if e2e_pos is not None and e2e_pos > 17.0:
-        violations.append(
-            f"cross_multibody position MAE {e2e_pos:.1f} cm exceeds 17 cm "
-            f"beyond-consumer budget"
-        )
-    elif e2e_pos is not None:
-        notes.append(f"cross_multibody position MAE {e2e_pos:.2f} cm (budget 17)")
-
-    e2e_ori = _mean(cross, "e2e", "consumer", "orientation_deg")
+    e2e_ori = _mean(cross, "e2e", "consumer_wrist", "orientation_deg")
+    if e2e_ori is None:
+        e2e_ori = _mean(cross, "e2e", "consumer", "orientation_deg")
     if e2e_ori is not None and e2e_ori > 8.0:
         violations.append(
             f"cross_multibody orientation MAE {e2e_ori:.1f}° exceeds 8° "

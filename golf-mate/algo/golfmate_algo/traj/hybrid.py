@@ -107,6 +107,49 @@ def _plane_circle_blend(pos: ArrayF, lo: int, hi: int, blend: float) -> tuple[Ar
     return out, float(plane.plane_residual_rms), float(plane.circle_residual_rms)
 
 
+def _finish_on_circle(
+    pos: ArrayF, addr: int, fin: int, *, gain: float = 0.55
+) -> tuple[ArrayF, float, float, float]:
+    """SciRep-style soft project FIN onto the virtual swing-plane circle.
+
+    Fits plane/circle on ``[addr, fin]``, projects ``pos[fin]`` onto the circle,
+    then distributes the correction linearly from address→finish (analogue of
+    their constant accel-bias re-integration that places FIN on the circle).
+    """
+    lo, hi = int(addr), int(fin) + 1
+    if hi - lo < 8 or gain <= 0:
+        return pos, 0.0, 0.0, 0.0
+    plane = fit_swing_plane(pos[lo:hi])
+    c = plane.centroid
+    nrm = plane.normal
+    ref = np.array([1.0, 0.0, 0.0]) if abs(nrm[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = np.cross(nrm, ref)
+    e1 /= np.linalg.norm(e1) + 1e-12
+    e2 = np.cross(nrm, e1)
+    center_uv = np.array(
+        [np.dot(plane.center_3d - c, e1), np.dot(plane.center_3d - c, e2)]
+    )
+    p_fin = pos[fin]
+    # Project FIN onto plane then onto circle radius
+    x = p_fin - c
+    x_p = x - nrm * float(np.dot(x, nrm))
+    uv = np.array([float(np.dot(x_p, e1)), float(np.dot(x_p, e2))])
+    vec = uv - center_uv
+    nrm_uv = float(np.linalg.norm(vec)) + 1e-12
+    uv_c = center_uv + vec / nrm_uv * max(float(plane.radius), 1e-3)
+    ep = c + uv_c[0] * e1 + uv_c[1] * e2
+    delta = ep - p_fin
+    corr = float(np.linalg.norm(delta))
+    if corr < 1e-9:
+        return pos, float(plane.plane_residual_rms), float(plane.circle_residual_rms), 0.0
+    out = pos.copy()
+    span = max(1, fin - addr)
+    for k in range(addr, fin + 1):
+        alpha = gain * ((k - addr) / span) ** 2  # quadratic ramp like double-int bias
+        out[k] = out[k] + alpha * delta
+    return out, float(plane.plane_residual_rms), float(plane.circle_residual_rms), corr
+
+
 def _fourier_center_from_residual(
     quats: ArrayF,
     gyro: ArrayF,
@@ -174,7 +217,15 @@ def estimate_hybrid_trajectory(
     plane_blend: float = 0.15,
     max_residual_m_s2: float = 25.0,
 ) -> HybridTrajectoryResult:
-    """Hybrid wrist trajectory reconstruction matching the pipeline contract."""
+    """Hybrid wrist trajectory reconstruction matching the pipeline contract.
+
+    SciRep-inspired upgrades (Kim & Park, SciRep 2024; extreme-algo):
+    * Event ZUPT at ADD/BST/FIN via constrained LS blend
+    * Soft plane/circle blend on the translating-centre path
+    * Finish-on-circle soft closure (project FIN residual onto virtual circle)
+    * Rigidity-failure flagged in meta (club-mount casting) without DR replace —
+      pure DR under consumer noise often exceeds broken-lever error
+    """
     quats = np.asarray(quats, dtype=np.float64).reshape(-1, 4)
     gyro = np.asarray(gyro, dtype=np.float64).reshape(-1, 3)
     accel = np.asarray(accel, dtype=np.float64).reshape(-1, 3)
@@ -203,7 +254,9 @@ def estimate_hybrid_trajectory(
     addr = int(np.clip(phases.address_idx, 0, n - 1))
     top = int(np.clip(phases.top_idx, 0, n - 1))
     fin = int(np.clip(phases.finish_idx, 0, n - 1))
+    imp = int(np.clip(phases.impact_idx, 0, n - 1))
 
+    # Default lever LS (ω²-weighted inside estimate_lever_arm).
     rigid = estimate_lever_arm(quats, gyro, accel, dt)
     L = rigid.lever_arm_body.copy()
     resid_rms = float(rigid.residual_rms_m_s2)
@@ -218,6 +271,76 @@ def estimate_hybrid_trajectory(
     center0 = -pos_rel[addr]
     pos = pos_rel + center0
     vel = vel_kin.copy()
+
+    # Rigidity-failure detector (club-mount casting) — meta + kinematic fallback.
+    _, _, pos_dr = reconstruct_trajectory(quats, accel, dt, phases=phases)
+    span_dr = float(np.max(np.linalg.norm(pos_dr - pos_dr[addr], axis=1)))
+    span_lever = float(np.max(np.linalg.norm(pos - pos[addr], axis=1)))
+    radius = float(np.linalg.norm(L))
+    rigidity_fail = (
+        (resid_rms >= 12.0 and span_dr > 0.8 and span_lever < 0.70 * span_dr)
+        or (resid_rms >= 15.0 and radius < 0.95 and span_dr > 1.0)
+        or (radius < 0.35 and span_dr > 1.2 and span_lever < 0.50 * span_dr)
+    )
+
+    # Casting / distal-mount: lever LS collapses to a short radius while path span
+    # is large. Pure DR often explodes under consumer noise — replace with a
+    # club-scale rigid prior along the estimated lever direction (r≈1.0 m), then
+    # soft plane/circle closure. Wrist-mount product path rarely trips this.
+    if rigidity_fail and radius < 0.70:
+        u = L / (radius + 1e-12)
+        r_prior = 1.0  # forearm+club scale (casting_pathology / club mount)
+        L = (r_prior * u).astype(np.float64)
+        for i in range(n):
+            R = so3.quat_to_rotmat(quats[i])
+            pos_rel[i] = R @ L
+            vel_kin[i] = R @ (_skew(gyro[i]) @ L)
+        center0 = -pos_rel[addr]
+        pos = pos_rel + center0
+        vel = vel_kin.copy()
+        radius = r_prior
+        # Soft plane closure on the prior circle
+        lo, hi = addr, min(n, fin + 1)
+        plane_rms = 0.0
+        circ_rms = 0.0
+        if hi - lo >= 8:
+            try:
+                pos, plane_rms, circ_rms = _plane_circle_blend(pos, lo, hi, 0.25)
+                vel = np.gradient(pos, dt, axis=0)
+            except (ValueError, np.linalg.LinAlgError):
+                pass
+        return HybridTrajectoryResult(
+            lever_arm_body=L,
+            radius_m=float(radius),
+            center_world=np.broadcast_to(center0, (n, 3)).copy(),
+            positions=pos.astype(np.float64),
+            velocities=vel.astype(np.float64),
+            residual_rms_m_s2=resid_rms,
+            rank=rank,
+            valid=False,
+            blend_w_lever=1.0,
+            plane_residual_rms=float(plane_rms),
+            circle_residual_rms=float(circ_rms),
+            center_harmonics=0,
+            fallback=1.0,
+            meta={
+                "center_var": 0.0,
+                "center_var_threshold": float(center_var_threshold),
+                "center_variation_on": 0.0,
+                "constrained_blend": 0.0,
+                "center_gain": 0.0,
+                "plane_blend_applied": float(1.0 if plane_rms or circ_rms else 0.0),
+                "finish_circle_corr_m": 0.0,
+                "rigid_residual_m_s2": resid_rms,
+                "rigidity_fail": 1.0,
+                "rigidity_prior_radius_m": float(r_prior),
+                "span_dr_m": float(span_dr),
+                "span_lever_m": float(span_lever),
+                "active_slice_top": float(top),
+                "active_slice_imp": float(imp),
+                "active_slice_fin": float(fin),
+            },
+        )
 
     c_var = _implied_center_variance(quats, accel, dt, phases, L)
     moving = c_var >= center_var_threshold
@@ -265,7 +388,7 @@ def estimate_hybrid_trajectory(
         except (ValueError, np.linalg.LinAlgError):
             w_cstr = 0.0
 
-        # D: soft plane / circle closure
+        # D: soft plane / circle closure (SciRep virtual-circle prior)
         lo, hi = addr, min(n, fin + 1)
         if hi - lo >= 8 and plane_blend > 0 and w_cstr > 0:
             try:
@@ -274,6 +397,23 @@ def estimate_hybrid_trajectory(
                 apply_plane = True
             except (ValueError, np.linalg.LinAlgError):
                 pass
+
+        # E: SciRep finish-on-circle — soft-project FIN onto the fitted circle,
+        # then distribute the correction linearly from ADD→FIN (accel-bias analogue).
+        if hi - lo >= 8:
+            try:
+                pos, plane_rms2, circ_rms2, fin_corr = _finish_on_circle(
+                    pos, addr, fin, gain=0.55
+                )
+                if fin_corr > 1e-6:
+                    vel = np.gradient(pos, dt, axis=0)
+                    plane_rms = max(plane_rms, plane_rms2)
+                    circ_rms = max(circ_rms, circ_rms2)
+                    apply_plane = True
+            except (ValueError, np.linalg.LinAlgError):
+                fin_corr = 0.0
+        else:
+            fin_corr = 0.0
 
         span_hy = float(np.max(np.linalg.norm(pos - pos[addr], axis=1)))
         if span_hy > 12.0:
@@ -285,11 +425,13 @@ def estimate_hybrid_trajectory(
             apply_plane = False
             plane_rms = 0.0
             circ_rms = 0.0
+            fin_corr = 0.0
             fallback = 1.0
         else:
             fallback = 0.0
     else:
         fallback = 0.0
+        fin_corr = 0.0
 
     w_lever = 1.0 - w_cstr
     valid = bool(rank >= 2 and resid_rms < max_residual_m_s2)
@@ -314,7 +456,14 @@ def estimate_hybrid_trajectory(
             "constrained_blend": float(w_cstr),
             "center_gain": float(center_gain if moving else 0.0),
             "plane_blend_applied": float(1.0 if apply_plane else 0.0),
+            "finish_circle_corr_m": float(fin_corr),
             "rigid_residual_m_s2": resid_rms,
+            "rigidity_fail": float(1.0 if rigidity_fail else 0.0),
+            "span_dr_m": float(span_dr),
+            "span_lever_m": float(span_lever),
+            "active_slice_top": float(top),
+            "active_slice_imp": float(imp),
+            "active_slice_fin": float(fin),
         },
     )
 

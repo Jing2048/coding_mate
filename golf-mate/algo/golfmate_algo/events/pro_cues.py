@@ -137,10 +137,12 @@ def pro_hybrid_params(peak_omega_rad_s: float) -> dict[str, float]:
             "center_var_threshold": 0.07,
             "center_gain": 0.15,
             "constrained_blend": 0.40,
+            "plane_blend": 0.15,
         }
     # Slightly more willing to engage translating-centre + ZUPT blend
     return {
         "center_var_threshold": 0.05,
         "center_gain": 0.20,
         "constrained_blend": 0.45,
+        "plane_blend": 0.22,
     }

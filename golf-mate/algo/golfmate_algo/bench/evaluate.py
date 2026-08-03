@@ -187,9 +187,14 @@ def _score_events(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
             failures[case.error_label] = failures.get(case.error_label, 0) + 1
             continue
         tr = case.swing.phases_true
+        labels = [case.error_label]
+        # Wrist-mount product stratum (exclude distal casting / club mount)
+        if case.error_label == "consumer" and "casting" not in case.label:
+            labels.append("consumer_wrist")
         for name in ("address", "top", "impact", "finish"):
             err_ms = abs(getattr(det, f"{name}_idx") - getattr(tr, f"{name}_idx")) / fs * 1000.0
-            buckets.setdefault((name, case.error_label), []).append(err_ms)
+            for lab in labels:
+                buckets.setdefault((name, lab), []).append(err_ms)
     out: dict[str, Any] = {}
     for (name, cond), vals in sorted(buckets.items()):
         d = _sum_dict(summarize(vals, n_boot=n_boot, seed=30))
@@ -221,23 +226,23 @@ def _score_e2e(cases: list[SwingCase], n_boot: int) -> dict[str, Any]:
         addr = min(ph.address_idx, report.quats.shape[0] - 1)
         n = min(report.quats.shape[0], case.swing.quats_true.shape[0])
         aligned = _yaw_align(report.quats[:n], case.swing.quats_true[:n], addr)
-        ori.setdefault(case.error_label, []).append(
-            float(np.mean(orientation_error_deg(aligned, case.swing.quats_true[:n])))
-        )
-        impact.setdefault(case.error_label, []).append(
-            abs(report.phases.impact_idx - ph.impact_idx) / fs * 1000.0
-        )
+        ori_err = float(np.mean(orientation_error_deg(aligned, case.swing.quats_true[:n])))
+        imp_err = abs(report.phases.impact_idx - ph.impact_idx) / fs * 1000.0
         truth = case.swing.positions_true[:n] - case.swing.positions_true[ph.address_idx]
         window = slice(ph.address_idx, min(ph.finish_idx + 1, n))
         pos_e = _yaw_rotate_positions(
             report.positions[:n], report.quats[:n], case.swing.quats_true[:n], addr
         )
-        pos.setdefault(case.error_label, []).append(
-            float(np.mean(np.linalg.norm(pos_e[window] - truth[window], axis=1) * 100.0))
-        )
-        fallback.setdefault(case.error_label, []).append(
-            float(report.meta.get("fallback", 0.0))
-        )
+        pos_err = float(np.mean(np.linalg.norm(pos_e[window] - truth[window], axis=1) * 100.0))
+        fb = float(report.meta.get("fallback", 0.0))
+        labels = [case.error_label]
+        if case.error_label == "consumer" and "casting" not in case.label:
+            labels.append("consumer_wrist")
+        for lab in labels:
+            ori.setdefault(lab, []).append(ori_err)
+            impact.setdefault(lab, []).append(imp_err)
+            pos.setdefault(lab, []).append(pos_err)
+            fallback.setdefault(lab, []).append(fb)
     out: dict[str, Any] = {}
     for cond in sorted(set(ori) | set(impact) | set(pos)):
         out[cond] = {

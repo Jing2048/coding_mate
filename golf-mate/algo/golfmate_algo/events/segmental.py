@@ -151,8 +151,26 @@ def detect_phases_segmental(
     # Collision = broadband mechanical transient (club–ball). Mocap-derived /
     # low-ODR streams lack that shock — do NOT silently rename peak-ω as impact
     # without labelling the semantic change.
+    #
+    # SciRep / casting-robust selection (extreme-algo):
+    # 1) Coarse top from signed-rate zero-crossing so we never pick backswing
+    #    release spikes (club-mount casting creates early HF energy).
+    # 2) Among significant peaks *after* top, prefer the latest (ball strike
+    #    is typically the last large transient in the downswing window).
+    peak_idx = int(np.argmax(omega))
+    down_sign = np.sign(signed[peak_idx]) if signed[peak_idx] != 0 else 1.0
+    coarse_top = -1
+    for i in range(min(peak_idx, n - 1), 0, -1):
+        if signed[i] * down_sign > 0 and signed[i - 1] * down_sign <= 0:
+            coarse_top = i - 1
+            break
+    if coarse_top < 0:
+        coarse_top = int(np.argmin(np.abs(signed[: max(1, peak_idx)])))
+
     search_lo = max(0, motion_start - int(0.05 * fs))
     search_hi = min(n - 1, motion_end + int(0.10 * fs))
+    # Gate collision search to post-top (downswing / early follow-through).
+    search_lo = max(search_lo, int(coarse_top))
     seg = impact_score[search_lo : search_hi + 1]
     method = "transient"
     impact_mode = "collision"
@@ -161,13 +179,65 @@ def detect_phases_segmental(
     snr = float(np.max(seg) / noise_floor) if seg.size else 0.0
     # Need usable bandwidth for a strike transient (~>80 Hz Nyquist ⇒ fs≳160).
     collision_feasible = fs >= 120.0 and snr > 4.0
+    impact_idx = -1
     if seg.size and collision_feasible:
-        impact_idx = search_lo + int(np.argmax(seg))
-        impact_confidence = float(np.clip((snr - 4.0) / 8.0, 0.35, 1.0))
-    else:
+        # Prefer collision peaks near peak-|ω| (golf impact ≈ max rate + shock).
+        # Casting: peak-|ω| is early (release) while ball strike is a later HF
+        # peak — accept latest significant peak at/after peak-|ω|.
+        # Clean high-ODR synth without ball shock: no peak near/after peak-|ω|
+        # clears thr → kinematic proxy (avoid latching top-transition HF).
+        peak_in = float(np.max(seg))
+        peak_omega_rel = int(np.clip(peak_idx - search_lo, 0, max(0, seg.size - 1)))
+        # Casting: early release HF can dominate seg max and raise thr above the
+        # real strike. Threshold post-peak candidates against the post-peak max.
+        peak_after = float(np.max(seg[peak_omega_rel:])) if peak_omega_rel < seg.size else peak_in
+        thr_pre = max(3.0 * noise_floor, 0.45 * peak_in)
+        thr_post = max(3.0 * noise_floor, 0.30 * peak_after)
+        cand_pre: list[int] = []
+        cand_post: list[int] = []
+        for j in range(1, seg.size - 1):
+            if not (seg[j] >= seg[j - 1] and seg[j] >= seg[j + 1]):
+                continue
+            if j < peak_omega_rel - max(1, int(0.02 * fs)):
+                if seg[j] >= thr_pre:
+                    cand_pre.append(j)
+            else:
+                if seg[j] >= thr_post:
+                    cand_post.append(j)
+        win = max(1, int(0.12 * fs))
+        near = [j for j in cand_post if abs(j - peak_omega_rel) <= win]
+        after = list(cand_post)
+        soft_thr = max(3.0 * noise_floor, 0.15 * peak_after)
+        lo_w = max(0, peak_omega_rel - win)
+        hi_w = min(seg.size, peak_omega_rel + win + 1)
+        win_seg = seg[lo_w:hi_w]
+        win_argmax = lo_w + int(np.argmax(win_seg)) if win_seg.size else peak_omega_rel
+        if near:
+            impact_rel = max(near, key=lambda j: float(seg[j]))
+            impact_idx = search_lo + impact_rel
+            method = "transient_near_peak_omega"
+            impact_confidence = float(np.clip((snr - 4.0) / 8.0, 0.35, 1.0))
+        elif after:
+            # Prefer strongest post-peak candidate (strike), not merely latest.
+            impact_rel = max(after, key=lambda j: float(seg[j]))
+            impact_idx = search_lo + impact_rel
+            method = "transient_best_after_peak_omega"
+            impact_confidence = float(np.clip((snr - 4.0) / 8.0, 0.35, 1.0))
+        elif (
+            float(seg[win_argmax]) >= soft_thr
+            and float(omega[search_lo + win_argmax]) >= 0.25 * peak_omega
+        ):
+            impact_idx = search_lo + win_argmax
+            method = "transient_peak_omega_window"
+            impact_confidence = float(np.clip((snr - 4.0) / 8.0, 0.35, 1.0))
+        elif cand_pre and not after:
+            # No post-peak collision — leave to kinematic proxy.
+            pass
+
+    if impact_idx < 0:
         # Kinematic proxy: after the likely top, blend |ω| with |a|.
         # In a real downswing, centripetal |a| and rate both rise toward impact.
-        top_guess = int(np.argmin(np.abs(signed[: max(1, int(0.7 * n))])))
+        top_guess = int(coarse_top)
         lo_k = max(top_guess + 1, motion_start)
         hi_k = min(n - 1, motion_end + 1)
         if hi_k <= lo_k:
@@ -186,8 +256,6 @@ def detect_phases_segmental(
             method = "unavailable_low_signal"
 
     # --- Top: sign reversal of the signed rate before impact
-    peak_idx = int(np.argmax(omega))
-    down_sign = np.sign(signed[peak_idx]) if signed[peak_idx] != 0 else 1.0
     top_idx = -1
     search_from = min(impact_idx, n - 1)
     for i in range(search_from, 0, -1):
@@ -203,14 +271,77 @@ def detect_phases_segmental(
     if impact_idx - top_idx < min_ds:
         top_idx = max(1, impact_idx - min_ds)
 
-    # --- Address / Finish: hysteresis outward from the motion span
+    # --- Address / Finish (SciRep Kim&Park 2024 kinematic anchors)
+    # ADD ≈ last sustained quiet before takeaway. FIN ≈ last sustained quiet
+    # in follow-through (early mid-FT dips are common under consumer noise).
+    quiet_n = max(2, int(0.04 * fs))
     address_idx = _hysteresis_backward(omega, motion_start, hi, lo)
+
+    # SciRep walk-back from Top: skip top quiet → traverse backswing → pre-swing quiet.
+    # Only engage when hysteresis collapsed toward Top (failed takeaway lock).
+    i = int(top_idx)
+    while i > 0 and omega[i] < hi:
+        i -= 1
+    while i > 0 and omega[i] >= lo:
+        i -= 1
+    run = 0
+    addr_from_top = i
+    for j in range(i, -1, -1):
+        if omega[j] < lo:
+            run += 1
+            if run >= quiet_n:
+                addr_from_top = j
+                break
+        else:
+            run = 0
+    if top_idx - address_idx < int(0.35 * fs):
+        # Hysteresis failed / started mid-backswing — pull toward SciRep quiet.
+        address_idx = min(address_idx, addr_from_top)
     address_idx = min(address_idx, max(0, top_idx - 1))
     min_bs = int(min_backswing_s * fs)
     if top_idx - address_idx < min_bs:
         address_idx = max(0, top_idx - min_bs)
 
-    finish_idx = _hysteresis_forward(omega, motion_end, hi, lo)
+    # Finish: SciRep FIN ≈ settling local-min after impact.
+    # First sustained quiet (good on clean planar); if that crossing is still
+    # shallow vs the address quiet floor, deepen to the ω argmin over the next
+    # ~0.5 s (consumer multibody often dips mid-FT before true settle).
+    min_ft = impact_idx + max(1, int(0.15 * fs))
+    max_ft = impact_idx + max(int(1.20 * fs), quiet_n * 5)
+    max_ft = min(n - 1, max_ft)
+    min_ft = min(min_ft, max_ft)
+    finish_hyst = _hysteresis_forward(omega, max(motion_end, impact_idx), hi, lo)
+
+    a0 = max(0, address_idx - quiet_n * 2)
+    addr_floor = float(np.median(omega[a0 : address_idx + 1])) + 1e-9
+
+    run = 0
+    onset: int | None = None
+    for j in range(min_ft, max_ft + 1):
+        if omega[j] < lo:
+            run += 1
+            if run >= quiet_n:
+                onset = j - quiet_n + 1
+                break
+        else:
+            run = 0
+    if onset is None:
+        seg_ft = omega[min_ft : max_ft + 1]
+        fin_cand = min_ft + int(np.argmin(seg_ft)) if seg_ft.size else min_ft
+    else:
+        fin_cand = int(onset)
+        shallow = float(omega[onset]) > max(2.5 * addr_floor, 0.45 * lo)
+        if shallow:
+            end = min(max_ft, onset + max(1, int(0.50 * fs)))
+            deep = onset + int(np.argmin(omega[onset : end + 1]))
+            if float(omega[deep]) < 0.5 * float(omega[onset]):
+                fin_cand = int(deep)
+    # Hysteresis may push later inside the window (avoid early motion_end cutoffs).
+    if min_ft <= finish_hyst <= max_ft:
+        finish_idx = max(fin_cand, finish_hyst)
+    else:
+        finish_idx = fin_cand
+    finish_idx = int(np.clip(finish_idx, min_ft, max_ft))
     finish_idx = max(finish_idx, min(n - 1, impact_idx + 1))
 
     top_idx = int(np.clip(top_idx, address_idx + 1, impact_idx - 1))
