@@ -34,11 +34,11 @@ pytest -q
 ```bash
 cd apple
 brew install xcodegen
-xcodegen generate
-open GolfMate.xcodeproj
+./scripts/regenerate_xcode.sh
+open GolfAiJing.xcodeproj
 ```
 
-需 Series 8 / Ultra 或更新真机。详见 [`apple/README.md`](apple/README.md) 与
+不要打开旧的 `GolfMate.xcodeproj`（若本地还在，先删掉）。需 Series 8 / Ultra 或更新真机。详见 [`apple/README.md`](apple/README.md) 与
 [`docs/PRD_APPLE_WATCH.md`](docs/PRD_APPLE_WATCH.md)。
 
 ## 前端骨架（未改产品功能）

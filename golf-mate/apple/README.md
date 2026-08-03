@@ -36,14 +36,41 @@ reproducible:
 ```bash
 cd golf-mate/apple
 brew install xcodegen
-xcodegen generate
+./scripts/regenerate_xcode.sh
 open GolfAiJing.xcodeproj
 ```
 
-If an old `GolfMate.xcodeproj` is still open, close it and open the regenerated
-`GolfAiJing.xcodeproj`. Set your Development Team for both targets, keep HealthKit
-enabled, and run on a physical Series 8 / Ultra or newer Watch.
-`CMBatchedSensorManager` does not provide high-rate data in the Watch simulator.
+### Fix: `WKCompanionAppBundleIdentifier` mismatch
+
+If Xcode reports:
+
+```text
+Invalid value of WKCompanionAppBundleIdentifier ... com.jing.golfai.GolfAiJing
+(expected com.golfmate.lab.GolfMate)
+```
+
+the Watch Info.plist is new, but Xcode is still building the **old** host
+`GolfMate.xcodeproj` (`com.golfmate.lab.GolfMate`). Fix:
+
+```bash
+# Quit Xcode first
+cd golf-mate/apple
+./scripts/regenerate_xcode.sh
+rm -rf ~/Library/Developer/Xcode/DerivedData/*Golf*
+open GolfAiJing.xcodeproj   # never GolfMate.xcodeproj
+```
+
+Confirm both targets:
+
+| Target | Bundle ID |
+|--------|-----------|
+| GolfAiJing | `com.jing.golfai.GolfAiJing` |
+| GolfAiJingWatch | `com.jing.golfai.GolfAiJing.watchkitapp` |
+| Watch → WKCompanionAppBundleIdentifier | `com.jing.golfai.GolfAiJing` |
+
+Set your Development Team for both targets, keep HealthKit enabled, and run on a
+physical Series 8 / Ultra or newer Watch. `CMBatchedSensorManager` does not
+provide high-rate data in the Watch simulator.
 
 In App Store Connect, create the app as **Golf-ai-Jing** (not GolfMate).
 

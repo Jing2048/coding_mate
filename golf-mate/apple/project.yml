@@ -6,6 +6,8 @@ options:
     watchOS: "10.0"
   xcodeVersion: "15.4"
   groupSortPosition: top
+  # Keep committed Info.plist files authoritative; do not rewrite paths to old GolfMate-* names.
+  createIntermediateGroups: true
 
 settings:
   base:
@@ -28,8 +30,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jing.golfai.GolfAiJing
         PRODUCT_NAME: Golf-ai-Jing
+        INFOPLIST_FILE: Config/GolfAiJing-Info.plist
+        GENERATE_INFOPLIST_FILE: false
     info:
-      path: Config/GolfMate-Info.plist
+      path: Config/GolfAiJing-Info.plist
       properties:
         CFBundleDisplayName: Golf-ai-Jing
         CFBundleName: Golf-ai-Jing
@@ -55,8 +59,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.jing.golfai.GolfAiJing.watchkitapp
         PRODUCT_NAME: Golf-ai-Jing
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
+        INFOPLIST_FILE: Config/GolfAiJingWatch-Info.plist
+        GENERATE_INFOPLIST_FILE: false
+        # Belt-and-suspenders: must equal iPhone PRODUCT_BUNDLE_IDENTIFIER exactly.
+        INFOPLIST_KEY_WKCompanionAppBundleIdentifier: com.jing.golfai.GolfAiJing
     info:
-      path: Config/GolfMateWatch-Info.plist
+      path: Config/GolfAiJingWatch-Info.plist
       properties:
         CFBundleDisplayName: Golf-ai-Jing
         CFBundleName: Golf-ai-Jing
@@ -65,6 +73,7 @@ targets:
         NSHealthUpdateUsageDescription: Golf-ai-Jing records the active golf workout used for swing capture.
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.jing.golfai.GolfAiJing
+        WKRunsIndependentlyOfCompanionApp: false
     entitlements:
       path: Config/GolfMateWatch.entitlements
 
