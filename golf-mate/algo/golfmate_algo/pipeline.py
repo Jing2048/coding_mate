@@ -108,6 +108,11 @@ def analyze_swing(
     phases, seg_diag = detect_phases_segmental(
         packet.t, gyro_c, accel_raw, return_diagnostics=True
     )
+    from golfmate_algo.events.pro_cues import pro_hybrid_params, refine_phases_pro
+
+    phases, pro_evt_meta = refine_phases_pro(
+        packet.t, gyro_c, accel_raw, phases, seg_diag
+    )
 
     # Offline anchors only when address is a trusted rest AND tilt is wrong.
     # Consumer accel noise can look like a large tilt error even when the AHRS
@@ -164,7 +169,11 @@ def analyze_swing(
 
     traj_meta: dict[str, float] = {}
     if trajectory == "hybrid":
-        hy = estimate_hybrid_trajectory(quats, gyro_c, accel_raw, dt, phases)
+        peak_w = float(seg_diag.quality.get("peak_omega_rad_s", 0.0))
+        hy_kw = pro_hybrid_params(peak_w)
+        hy = estimate_hybrid_trajectory(
+            quats, gyro_c, accel_raw, dt, phases, **hy_kw
+        )
         pos, vel = hy.positions, hy.velocities
         traj_meta = {
             "radius_m": hy.radius_m,
@@ -177,6 +186,7 @@ def analyze_swing(
             "center_harmonics": float(hy.center_harmonics),
             "fallback": float(hy.fallback),
             **hy.meta,
+            **pro_evt_meta,
         }
     elif trajectory == "lever_arm":
         la = estimate_lever_arm(quats, gyro_c, accel_raw, dt)
@@ -186,12 +196,14 @@ def analyze_swing(
             "residual_rms_m_s2": la.residual_rms_m_s2,
             "rank": float(la.rank),
             "valid": float(la.valid),
+            **pro_evt_meta,
         }
         if not la.valid:
             _, vel, pos = reconstruct_trajectory(quats, accel_raw, dt, phases=phases)
             traj_meta["fallback"] = 1.0
     else:
         _, vel, pos = reconstruct_trajectory(quats, accel_raw, dt, phases=phases)
+        traj_meta = {**pro_evt_meta}
 
     pos = pos - pos[phases.address_idx]
     features = compute_wrist_features(packet.t, gyro_c, quats, vel, pos, phases)
@@ -205,14 +217,52 @@ def analyze_swing(
             "proxy_confidence": proxies.confidence,
         }
     )
-    findings = diagnose(features)
     seq = sequence_proxy(packet.t, gyro_c, phases)
+
+    # Build a provisional report for the pro-swing layer, then coach on top.
+    from golfmate_algo.model.pro_report import build_pro_swing_report
+    from golfmate_algo.types import SwingReport as _SR
+
+    _tmp = _SR(
+        phases=phases,
+        features=features,
+        findings=[],
+        quats=quats,
+        positions=pos,
+        velocities=vel,
+        gate_open=np.asarray(ahrs_diag.get("gate", []), dtype=np.float64),
+        meta={
+            "radius_m": float(traj_meta.get("radius_m", 0.0)),
+            "residual_rms_m_s2": float(traj_meta.get("residual_rms_m_s2", 0.0)),
+            "rank": float(traj_meta.get("rank", 0.0)),
+            "fallback": float(traj_meta.get("fallback", 0.0)),
+            "plane_residual_rms": float(traj_meta.get("plane_residual_rms", 1.0)),
+            "impact_mode": seg_diag.impact_mode,
+        },
+    )
+    device = str(packet.frame.device_id)
+    channel_kind = (
+        "hand_segment"
+        if "glove" in device.lower()
+        else ("forearm_segment" if "watch" in device.lower() else "unknown_segment")
+    )
+    pro = build_pro_swing_report(
+        _tmp, t=packet.t, gyro=gyro_c, channel_kind=channel_kind
+    )
+    # Enrich sequence proxy with plane/twist lag once channels exist
+    seq = sequence_proxy(
+        packet.t,
+        gyro_c,
+        phases,
+        plane_rate=pro.channels.omega_plane_rad_s,
+        twist_rate=pro.channels.twist_rate_rad_s,
+    )
+    pro_dict = pro.as_dict()
+    findings = diagnose(features, pro=pro_dict)
 
     ref_meta: dict = {}
     if compare_to_ideal:
-        from golfmate_algo.types import SwingReport as _SR
-
-        _tmp = _SR(
+        _tmp2 = _SR(
             phases=phases,
             features=features,
             findings=findings,
@@ -221,7 +271,7 @@ def analyze_swing(
             velocities=vel,
             gate_open=np.asarray(ahrs_diag.get("gate", []), dtype=np.float64),
         )
-        ref_score = score_against_reference(_tmp)
+        ref_score = score_against_reference(_tmp2)
         findings = list(findings) + [reference_finding(ref_score)]
         ref_meta = {
             "reference_score": {
@@ -242,7 +292,7 @@ def analyze_swing(
         velocities=vel,
         gate_open=np.asarray(ahrs_diag.get("gate", []), dtype=np.float64),
         meta={
-            "backend": "gated_adaptive+offline_anchors",
+            "backend": "gated_adaptive+pro_swing_model",
             "trajectory": trajectory,
             "gyro_bias": np.asarray(gyro_bias, dtype=np.float64).tolist(),
             "address_init_quality": init_quality.get("quality", "unknown"),
@@ -250,6 +300,9 @@ def analyze_swing(
             "sequence_proxy": {
                 "wrist_peak_idx": seq.wrist_peak_idx,
                 "wrist_peak_to_impact_s": seq.wrist_peak_to_impact_s,
+                "plane_peak_to_impact_s": seq.plane_peak_to_impact_s,
+                "twist_peak_to_impact_s": seq.twist_peak_to_impact_s,
+                "lag_proxy_s": seq.lag_proxy_s,
             },
             "biomech_proxies": {
                 "x_factor_proxy_deg": proxies.x_factor_proxy_deg,
@@ -257,6 +310,7 @@ def analyze_swing(
                 "confidence": proxies.confidence,
                 "is_proxy": True,
             },
+            "pro_swing": pro_dict,
             "impact_mode": seg_diag.impact_mode,
             "impact_confidence": float(seg_diag.impact_confidence),
             "impact_method": seg_diag.method,

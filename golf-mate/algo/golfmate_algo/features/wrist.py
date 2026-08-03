@@ -51,18 +51,29 @@ def compute_wrist_features(
     mask[a : fin + 1] = True
     plane = fit_swing_plane(positions, mask=mask)
 
-    # Closure rate proxy: relative yaw about plane normal in pre-impact window
+    # Closure rate proxy: signed twist about swing-plane normal (address→impact).
+    # This is segment axial rotation rate — NOT clubface closure.
     pre = max(a, imp - max(3, (imp - top) // 3))
-    q0 = quats[a]
-    yaws = []
+    nrm = plane.normal
+    twists = []
+    q0 = so3.normalize_quat(quats[a])
     for i in range(pre, imp + 1):
-        # relative rotation from address
-        q_rel = so3.quat_multiply(so3.quat_conjugate(q0), quats[i])
-        # extract twist about plane normal approximated via vector part projected
-        yaws.append(2.0 * float(np.arctan2(np.linalg.norm(q_rel[1:]), q_rel[0])))
-    yaws_arr = np.asarray(yaws, dtype=np.float64)
+        q_rel = so3.quat_multiply(so3.quat_conjugate(q0), so3.normalize_quat(quats[i]))
+        if q_rel[0] < 0:
+            q_rel = -q_rel
+        # project vector part onto plane normal expressed in address body frame
+        R0 = so3.quat_to_rotmat(q0)
+        n_body = R0.T @ nrm
+        n_body = n_body / (np.linalg.norm(n_body) + 1e-12)
+        proj = float(np.dot(q_rel[1:], n_body)) * n_body
+        q_tw = so3.normalize_quat(np.array([q_rel[0], *proj], dtype=np.float64))
+        ang = 2.0 * float(np.arctan2(np.linalg.norm(q_tw[1:]), q_tw[0]))
+        if float(np.dot(q_tw[1:], n_body)) < 0.0:
+            ang = -ang
+        twists.append(ang)
+    twists_arr = np.unwrap(np.asarray(twists, dtype=np.float64))
     dt = float(t[imp] - t[pre]) if imp > pre else 1e-9
-    closure_rate = float((yaws_arr[-1] - yaws_arr[0]) / dt) if len(yaws_arr) > 1 else 0.0
+    closure_rate = float((twists_arr[-1] - twists_arr[0]) / dt) if len(twists_arr) > 1 else 0.0
 
     return WristFeatures(
         tempo_s=tempo_s,
@@ -79,5 +90,6 @@ def compute_wrist_features(
             "plane_residual_rms": plane.plane_residual_rms,
             "circle_residual_rms": plane.circle_residual_rms,
             "plane_radius_m": plane.radius,
+            "closure_is_segment_twist_proxy": 1.0,
         },
     )

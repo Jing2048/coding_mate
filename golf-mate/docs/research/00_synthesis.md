@@ -43,12 +43,13 @@
 - **`devices.normalize_packet`**：安装外参 + 左右手/腕侧 → canonical lead-right 解剖系
 - Watch / 手套卡 **规格契约**（无 Swift；假数据工厂供 UT）
 - GolfGatedAHRS（门控 + 姿态序列）
-- 相位事件检测
-- 腕轨迹重建（hybrid / ZUPT + plane）
-- 特征：tempo、rhythm、peak ω、平面角、closure 代理、手速代理
-- 可解释诊断规则 + **理想运动学参考带**（分位数代理，非唯一正确姿势）
+- 相位事件检测（含 pro-regime 双轴 Top / 动能 Impact 细化）
+- 腕轨迹重建（hybrid / ZUPT + plane；高动态下更易启用平移中心）
+- 特征：tempo、rhythm、peak ω、平面角、**平面法向 twist closure 代理**、手速代理
+- **专业挥杆建模层**：Address 相对 swing/twist 通道、事件锚定相位归一化、Release 形态学、PCA 波形流形、可观测性不确定度
+- 可解释诊断规则 + **理想运动学参考带**（分位数代理，非唯一正确姿势）+ release/manifold 诊断
 - **`export.SwingFeatureVector`**（Core ML 可导出契约，本轮无 `.mlmodel`）
-- `SwingReport` 稳定 schema
+- `SwingReport` 稳定 schema（`meta.pro_swing`）
 - pytest 全绿
 
 ### P1（接口预留）
@@ -81,14 +82,16 @@
 
 **可以声称：**
 
-- 腕姿态、节奏、冲击时刻、平面与路径代理、相对 Address 的闭合趋势
+- 腕姿态、节奏、冲击时刻、平面与路径代理、相对 Address 的 segment twist/swing 通道
+- Release 形态学与相对专业波形流形的分布距离（均为代理，带 confidence/validity）
 - 基于规则的改进提示，并标注为代理/不确定度
 
 **不可声称（单腕 P0）：**
 
-- 绝对杆面角 / 真实 Club Path（无杆头观测）
-- 厘米级全身关节角
-- 「唯一正确挥杆」模板
+- 绝对杆面角 / 真实 Club Path / shaft lean（无杆头或多段观测）
+- 真实腕关节角（HackMotion 需要手+前臂双刚体）
+- 厘米级全身关节角 / 完整 pelvis→club 运动学序列
+- 「唯一正确挥杆」模板（流形是分布，不是单点姿势）
 
 ---
 
@@ -104,7 +107,26 @@
 
 ---
 
-## 6. 本轮工程验收命令
+## 7. 专业挥杆建模层（相对消费级基线的升级）
+
+对照 HackMotion / Cheetham / Kim&Park / SciRep / Lauer 等路线，本轮把「单节点消费级」提升为可解释的专业分析层，而不是再堆一个 AHRS：
+
+| 能力 | 实现 | 诚实边界 |
+|------|------|----------|
+| Swing / twist 通道 | `biomechanics/wrist_channels.py` | 段姿态代理，非腕关节角 |
+| 事件锚定相位归一化 | `model/phase_normalize.py` | Impact 硬锚；保留真实时长 |
+| Release 形态学 | `biomechanics/release.py` | early/gradual/late/abrupt 代理 |
+| 专业波形流形 | `model/elite_manifold.py` + `pro_manifold.json` | PCA 分布距离，非单点模板 |
+| 不确定度 | `quality/uncertainty.py` | measured/derived/proxy + validity |
+| 平移中心合成 | `SwingConfig.center_sway/lift` | 让 hybrid 可测 sway |
+| Casting 可观测 | `casting_swing` mount=3 | 前臂安装看不到远端 casting |
+| 高动态事件细化 | `events/pro_cues.py` | peak ω≥12 rad/s 才启用 |
+
+仍明确推迟：latent 全身 PCR、batch MAP smoother、真实多刚体空间 DoF、原始表盘 MEMS gold set。
+
+---
+
+## 8. 本轮工程验收命令
 
 ```bash
 cd golf-mate/algo

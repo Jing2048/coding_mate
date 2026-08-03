@@ -278,6 +278,11 @@ class SwingConfig:
     mount_extrinsic_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     # Golfer handedness; LEFT streams are device-framed so normalize recovers RH.
     handedness: Handedness = Handedness.RIGHT
+    # Optional translating rotation centre (pelvis/shoulder sway), metres.
+    # Lateral sway in the swing plane; 0 keeps the classic fixed-centre model.
+    center_sway_amp_m: float = 0.0
+    # Vertical lift/settle of the base during transition (m).
+    center_lift_amp_m: float = 0.0
 
     def total_s(self) -> float:
         return (
@@ -500,7 +505,7 @@ def build_swing(config: Optional[SwingConfig] = None) -> SwingTruth:
             seg_omega_body[s, i] = R.T @ seg_omega_world[s, i]
             seg_alpha_body[s, i] = R.T @ seg_alpha_world[s, i]
 
-    # --- serial-chain joint-origin kinematics (O_0 fixed) -------------------
+    # --- serial-chain joint-origin kinematics (O_0 optionally translating) ---
     offsets_body = np.array(
         [np.asarray(g.offset_world, dtype=np.float64) for g in cfg.geometry],
         dtype=np.float64,
@@ -509,7 +514,26 @@ def build_swing(config: Optional[SwingConfig] = None) -> SwingTruth:
     origin_pos = np.zeros((n_seg + 1, n, 3), dtype=np.float64)
     origin_vel = np.zeros((n_seg + 1, n, 3), dtype=np.float64)
     origin_acc = np.zeros((n_seg + 1, n, 3), dtype=np.float64)
-    origin_pos[0] = np.asarray(cfg.base_position, dtype=np.float64)[None, :]
+    base0 = np.asarray(cfg.base_position, dtype=np.float64)
+    # Sway / lift of the rotation centre: smooth bumps keyed to top/impact.
+    # Lateral axis ≈ in-plane horizontal (cross(n_axis, up)).
+    up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    lat = np.cross(n_axis, up)
+    lat_n = float(np.linalg.norm(lat))
+    lat = lat / lat_n if lat_n > 1e-9 else np.array([1.0, 0.0, 0.0])
+    t_top = float(cfg.address_s + cfg.backswing_s)
+    t_imp = t_top + float(cfg.downswing_s)
+    # Unitless phase envelopes
+    sway = cfg.center_sway_amp_m * np.sin(
+        np.pi * np.clip((t - cfg.address_s) / max(t_imp - cfg.address_s, 1e-6), 0.0, 1.0)
+    )
+    lift = cfg.center_lift_amp_m * np.sin(
+        np.pi * np.clip((t - cfg.address_s) / max(t_top - cfg.address_s, 1e-6), 0.0, 1.0)
+    )
+    origin_pos[0] = base0[None, :] + sway[:, None] * lat[None, :] + lift[:, None] * up[None, :]
+    # Analytic derivatives of sin envelopes (finite-diff fallback for simplicity)
+    origin_vel[0] = np.gradient(origin_pos[0], dt, axis=0)
+    origin_acc[0] = np.gradient(origin_vel[0], dt, axis=0)
 
     for s in range(n_seg):
         # world offset vector of segment s at every sample: R_s @ d_s
@@ -595,6 +619,11 @@ def build_swing(config: Optional[SwingConfig] = None) -> SwingTruth:
         "club_head_speed_impact_m_s": float(club_head_speed[impact_idx]),
         "club_head_speed_peak_m_s": float(np.max(club_head_speed)),
         "x_factor_top_deg": float(x_factor[top_idx] * _RAD2DEG),
+        "center_sway_amp_m": float(cfg.center_sway_amp_m),
+        "center_lift_amp_m": float(cfg.center_lift_amp_m),
+        "center_path_span_m": float(
+            np.max(np.linalg.norm(origin_pos[0] - origin_pos[0, 0], axis=1))
+        ),
     }
     for s in range(n_seg):
         meta[f"peak_speed_{SEGMENT_NAMES[s]}_deg_s"] = float(seg_peak_speed[s] * _RAD2DEG)
@@ -635,13 +664,38 @@ def casting_swing(config: Optional[SwingConfig] = None) -> SwingTruth:
     """Synthesise a pathological "casting" swing (club releases too early).
 
     The club's downswing speed peak is moved *ahead* of the arm's, breaking the
-    proximal->distal sequence, so :meth:`SwingTruth.kinematic_sequence_ok`
-    returns ``False``. Everything else remains exact ground truth.
+    proximal->distal sequence. The sensor is mounted on the club/hand segment
+    (mount_segment=3) so the IMU actually observes the early club release —
+    a forearm-only mount cannot see distal casting.
     """
-    cfg = config if config is not None else SwingConfig()
-    fr = list(cfg.downswing_peak_fraction)
+    from dataclasses import replace
+
+    base = config if config is not None else SwingConfig()
+    fr = list(base.downswing_peak_fraction)
     # Club (distal) peaks earliest -> early cast / loss of lag.
-    cfg.downswing_peak_fraction = (fr[0] + 0.02, fr[1] + 0.04, fr[2] + 0.08, 0.10)
+    cfg = replace(
+        base,
+        downswing_peak_fraction=(fr[0] + 0.02, fr[1] + 0.04, fr[2] + 0.08, 0.10),
+        mount_segment=3,
+    )
+    return build_swing(cfg)
+
+
+def pro_sequence_swing(
+    *,
+    sway_m: float = 0.04,
+    lift_m: float = 0.02,
+    plane_tilt_deg: float = 52.0,
+) -> SwingTruth:
+    """Healthier pro-like timing with mild translating centre (sway/lift)."""
+    cfg = SwingConfig(
+        plane_tilt_deg=plane_tilt_deg,
+        downswing_peak_fraction=(0.12, 0.18, 0.25, 0.32),
+        downswing_peak_rate_deg_s=(520.0, 500.0, 450.0, 1800.0),
+        center_sway_amp_m=sway_m,
+        center_lift_amp_m=lift_m,
+        mount_segment=2,
+    )
     return build_swing(cfg)
 
 

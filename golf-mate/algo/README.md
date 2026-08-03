@@ -33,9 +33,11 @@ ImuPacket (device mount frame)
   -> devices.normalize_packet  # extrinsic + handedness/wrist -> canonical lead-right
   -> dual-path / CROP-lite (optional)
   -> address init + GatedAdaptive AHRS
-  -> segmental phases
+  -> segmental phases (+ pro-regime refine)
   -> hybrid | lever_arm | dead_reckon trajectory
-  -> wrist features + biomech proxies + ideal reference band score
+  -> wrist features + biomech proxies
+  -> pro-swing layer (twist/swing channels, release, phase-normalize, PCA manifold)
+  -> coach diagnostics + ideal reference band score
   -> SwingReport (+ export.SwingFeatureVector for future Core ML)
 ```
 
@@ -70,11 +72,16 @@ Adapters (Watch / glove) fill the **device** frame; algo owns mirroring.
 | `math/so3.py` | Quaternion / SO(3) algebra |
 | `ahrs/suite.py` | Comparable filters + `DynamicsGate` |
 | `events/segmental.py` | Physics-anchored phase detection |
+| `events/pro_cues.py` | High-dynamic Top/Impact refine + hybrid knobs |
+| `biomechanics/wrist_channels.py` | Address-relative swing/twist segment channels |
+| `biomechanics/release.py` | Release morphology proxies |
+| `model/` | Phase normalize, pro PCA manifold, pro report |
+| `quality/` | Observability-aware validity / confidence |
 | `traj/hybrid.py` | Default trajectory (varying centre + constraints) |
 | `traj/lever_arm.py` | Rigid-rotation baseline |
 | `reference/` | Ideal kinematic bands + MultiSense elite manifest helpers |
 | `export/` | Versioned `SwingFeatureVector` / Core ML contract |
-| `synth/` | Analytic / multibody truth generators |
+| `synth/` | Analytic / multibody truth generators (incl. sway/lift, casting on club mount) |
 | `bench/` | Zero-trust evaluation |
 
 ## Headline numbers
