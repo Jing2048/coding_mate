@@ -300,7 +300,13 @@ def _run_session_mc(seeds: list[int], n_boot: int) -> dict[str, Any]:
     return out
 
 
-def _score_multisense(n_boot: int, max_swings: int = 30) -> dict[str, Any]:
+def _score_multisense(
+    n_boot: int,
+    max_swings: int = 30,
+    *,
+    subjects: list[str] | None = None,
+    track_label: str = "external_multisense",
+) -> dict[str, Any]:
     st = msg.dataset_status()
     if not st["ready"]:
         return {
@@ -308,13 +314,14 @@ def _score_multisense(n_boot: int, max_swings: int = 30) -> dict[str, Any]:
             "reason": "documentation or extracted HDF5 swings missing; "
             "run scripts/fetch_multisense.py",
             "dataset": st,
+            "track": track_label,
         }
     ori: list[float] = []
     impact: list[float] = []
     pos: list[float] = []
     fails = 0
     n = 0
-    for case in msg.iter_local_swings(max_swings=max_swings):
+    for case in msg.iter_local_swings(max_swings=max_swings, subjects=subjects):
         n += 1
         try:
             report = analyze_swing(case.packet)
@@ -323,11 +330,9 @@ def _score_multisense(n_boot: int, max_swings: int = 30) -> dict[str, Any]:
             continue
         fs = case.packet.frame.fs_hz
         impact.append(abs(report.phases.impact_idx - case.impact_idx) / fs * 1000.0)
-        # orientation vs mocap joint
         nq = min(report.quats.shape[0], case.quats_ref.shape[0])
         aligned = _yaw_align(report.quats[:nq], case.quats_ref[:nq], 0)
         ori.append(float(np.mean(orientation_error_deg(aligned, case.quats_ref[:nq]))))
-        # position
         np_ = min(report.positions.shape[0], case.positions_ref.shape[0])
         truth = case.positions_ref[:np_] - case.positions_ref[0]
         pos_e = _yaw_rotate_positions(
@@ -336,14 +341,22 @@ def _score_multisense(n_boot: int, max_swings: int = 30) -> dict[str, Any]:
         pos.append(float(np.mean(np.linalg.norm(pos_e - truth, axis=1) * 100.0)))
 
     if n == 0:
-        return {"status": "unavailable", "reason": "no swings loaded", "dataset": st}
+        return {
+            "status": "unavailable",
+            "reason": "no swings loaded for requested subjects",
+            "dataset": st,
+            "track": track_label,
+            "subjects_filter": subjects,
+        }
 
     return {
         "status": "ok",
+        "track": track_label,
         "provenance": "multisense_mocap_derived_imu",
         "doi": msg.DOI,
         "n_swings": n,
         "pipeline_failures": fails,
+        "subjects_filter": subjects,
         "dataset": st,
         "orientation_deg": _sum_dict(summarize(ori, n_boot=n_boot, seed=60)),
         "impact_ms": _sum_dict(summarize(impact, n_boot=n_boot, seed=61)),
@@ -353,6 +366,11 @@ def _score_multisense(n_boot: int, max_swings: int = 30) -> dict[str, Any]:
         "caveat": (
             "Input IMU is derived from mocap joint kinematics (PN 21-bone), not a "
             "raw wrist MEMS stream. Motion distribution is external; sensor noise is not."
+            + (
+                " Elite subset is an eval gate only — not an in-product posture library."
+                if subjects
+                else ""
+            )
         ),
     }
 
@@ -526,6 +544,31 @@ def render_zero_trust_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"| 位置 cm | {_fmt_ci(ext.get('position_cm'))} |")
     lines.append("")
 
+    elite = by.get("external_multisense_elite", {})
+    lines.append("## 7b. MultiSenseGolf 高水平子集（评测闸，非产品示范库）")
+    lines.append("")
+    if elite.get("status") != "ok":
+        lines.append(
+            f"状态：**{elite.get('status', 'unavailable')}** — {elite.get('reason', 'n/a')}"
+        )
+        if elite.get("elite_manifest_subjects"):
+            lines.append(
+                f"Manifest subjects: `{', '.join(elite['elite_manifest_subjects'])}` "
+                "(extract these Subject zips to score)."
+            )
+    else:
+        lines.append(
+            f"状态：**ok** · n={elite.get('n_swings')} · "
+            f"subjects={elite.get('subjects_filter')} · {elite.get('caveat', '')}"
+        )
+        lines.append("")
+        lines.append("| 指标 | mean [CI] |")
+        lines.append("|------|----------:|")
+        lines.append(f"| 姿态 ° | {_fmt_ci(elite.get('orientation_deg'))} |")
+        lines.append(f"| Impact ms | {_fmt_ci(elite.get('impact_ms'))} |")
+        lines.append(f"| 位置 cm | {_fmt_ci(elite.get('position_cm'))} |")
+    lines.append("")
+
     deg = payload.get("degradation", {})
     if deg.get("session"):
         lines.append("## 8. 退化曲线（会话，gated vs gyro_only）")
@@ -614,8 +657,36 @@ def run_evaluation(
         by_track["external_multisense"] = _score_multisense(
             n_boot, max_swings=10 if quick else 30
         )
+        from golfmate_algo.reference.elite import elite_subject_ids
+
+        elite_ids = elite_subject_ids()
+        # Only request subjects that are actually extracted locally.
+        available = set(st for st in msg.dataset_status().get("subjects_extracted", []))
+        elite_local = [s for s in elite_ids if s in available]
+        if elite_local:
+            by_track["external_multisense_elite"] = _score_multisense(
+                n_boot,
+                max_swings=10 if quick else 30,
+                subjects=elite_local,
+                track_label="external_multisense_elite",
+            )
+            by_track["external_multisense_elite"]["elite_manifest_subjects"] = elite_ids
+        else:
+            by_track["external_multisense_elite"] = {
+                "status": "unavailable",
+                "reason": (
+                    "elite subjects not extracted locally; manifest lists "
+                    f"{elite_ids or 'none'}"
+                ),
+                "elite_manifest_subjects": elite_ids,
+                "track": "external_multisense_elite",
+            }
     else:
         by_track["external_multisense"] = {
+            "status": "skipped",
+            "reason": "include_multisense=False",
+        }
+        by_track["external_multisense_elite"] = {
             "status": "skipped",
             "reason": "include_multisense=False",
         }

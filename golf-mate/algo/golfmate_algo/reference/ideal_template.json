@@ -1,0 +1,43 @@
+{
+  "version": "ideal-v1",
+  "n_train": 16,
+  "notes": "Percentile bands from healthy multibody swings; not a unique ideal pose.",
+  "bands": {
+    "tempo_s": {
+      "name": "tempo_s",
+      "p25": 0.63375,
+      "p50": 0.6849999999999999,
+      "p75": 0.71625
+    },
+    "rhythm": {
+      "name": "rhythm",
+      "p25": 13.083333333333355,
+      "p50": 14.222222222222246,
+      "p75": 14.916666666666673
+    },
+    "peak_omega_to_impact_s": {
+      "name": "peak_omega_to_impact_s",
+      "p25": 0.04499999999999993,
+      "p50": 0.04499999999999993,
+      "p75": 0.04499999999999993
+    },
+    "plane_angle_deg": {
+      "name": "plane_angle_deg",
+      "p25": 52.42872221725405,
+      "p50": 56.784769057246436,
+      "p75": 65.80101740771627
+    },
+    "hand_speed_peak_m_s": {
+      "name": "hand_speed_peak_m_s",
+      "p25": 10.498576605660967,
+      "p50": 11.217689459519711,
+      "p75": 11.628176450388013
+    },
+    "sequence_score_proxy": {
+      "name": "sequence_score_proxy",
+      "p25": 0.0,
+      "p50": 0.0,
+      "p75": 0.15610259183409653
+    }
+  }
+}

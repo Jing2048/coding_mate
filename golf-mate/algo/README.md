@@ -29,40 +29,53 @@ python -m golfmate_algo.bench.evaluate --mode full   # zero-trust dual-track rep
 ## Pipeline
 
 ```text
-ImuPacket
-  -> address init (robust quiet-window gravity alignment)
-  -> GatedAdaptive AHRS (dynamics-gated tilt correction + rest bias)
-  -> phase detection (high-pass impact, signed-rate zero crossing at top)
-  -> lever-arm trajectory (drift-free) | dead-reckon + ZUPT (baseline)
-  -> wrist features -> proxy diagnostics
-  -> SwingReport
+ImuPacket (device mount frame)
+  -> devices.normalize_packet  # extrinsic + handedness/wrist -> canonical lead-right
+  -> dual-path / CROP-lite (optional)
+  -> address init + GatedAdaptive AHRS
+  -> segmental phases
+  -> hybrid | lever_arm | dead_reckon trajectory
+  -> wrist features + biomech proxies + ideal reference band score
+  -> SwingReport (+ export.SwingFeatureVector for future Core ML)
 ```
 
 ```python
 from golfmate_algo.synth.analytic import planar_circular_swing
 from golfmate_algo.pipeline import analyze_swing
+from golfmate_algo.export import export_feature_vector
+from golfmate_algo.types import Handedness
 
-syn = planar_circular_swing()
+syn = planar_circular_swing(handedness=Handedness.LEFT)
 report = analyze_swing(syn.packet)
-print(report.features.rhythm, [f.code for f in report.findings])
+print(report.features.rhythm, report.meta["frame"], export_feature_vector(report).version)
 ```
+
+## Canonical anatomical frame
+
+After normalization: `handedness=RIGHT`, `wrist=LEAD`, identity extrinsic.
+
+| Axis | Meaning |
+|------|---------|
+| +X | Distal along forearm |
+| +Y | Ulnar → radial (mirrored for lefties) |
+| +Z | Completes right-handed triad |
+
+Adapters (Watch / glove) fill the **device** frame; algo owns mirroring.
 
 ## Modules
 
 | Path | Role |
 |------|------|
-| `math/so3.py` | Quaternion / SO(3) algebra, 6D rotation representation |
-| `ahrs/suite.py` | Six comparable filters plus the `DynamicsGate` |
-| `ahrs/init.py` | Address orientation, rest detection, gyro bias |
+| `devices/` | Adapter protocol, `normalize_packet`, Watch/glove specs |
+| `math/so3.py` | Quaternion / SO(3) algebra |
+| `ahrs/suite.py` | Comparable filters + `DynamicsGate` |
 | `events/segmental.py` | Physics-anchored phase detection |
-| `traj/lever_arm.py` | Rigid-rotation trajectory, truncated-SVD observability |
-| `traj/constrained.py` | Joint bias / tilt least squares with event constraints |
-| `traj/dead_reckon.py` | Classical integrate + ZUPT baseline |
-| `synth/analytic.py` | Closed-form swing truth (Gaussian rate basis) |
-| `synth/imu_model.py` | Full sensor error model |
-| `synth/session.py` | Multi-swing session for drift benchmarking |
-| `synth/multibody.py` | Multi-segment chain with kinematic sequence |
-| `bench/harness.py` | Monte-Carlo benchmark |
+| `traj/hybrid.py` | Default trajectory (varying centre + constraints) |
+| `traj/lever_arm.py` | Rigid-rotation baseline |
+| `reference/` | Ideal kinematic bands + MultiSense elite manifest helpers |
+| `export/` | Versioned `SwingFeatureVector` / Core ML contract |
+| `synth/` | Analytic / multibody truth generators |
+| `bench/` | Zero-trust evaluation |
 
 ## Headline numbers
 

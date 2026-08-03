@@ -20,7 +20,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from golfmate_algo.math import so3
-from golfmate_algo.types import ImuPacket, SensorFrame, SwingPhases, WristSide
+from golfmate_algo.types import Handedness, ImuPacket, SensorFrame, SwingPhases, WristSide
 
 ArrayF = NDArray[np.float64]
 
@@ -228,7 +228,17 @@ def load_swing_hdf5(
     )
 
     packet = ImuPacket(
-        frame=SensorFrame(fs_hz=fs, wrist=WristSide.LEAD, device_id=f"multisense/{subject_id}"),
+        frame=SensorFrame(
+            fs_hz=fs,
+            wrist=WristSide.LEAD,
+            handedness=(
+                Handedness.LEFT
+                if str(handedness).strip().lower().startswith("left")
+                else Handedness.RIGHT
+            ),
+            device_id=f"multisense/{subject_id}",
+            is_canonical=False,
+        ),
         t=t_rel,
         gyro=gyro,
         accel=accel,

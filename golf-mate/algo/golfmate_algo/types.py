@@ -33,6 +33,8 @@ class SensorFrame:
 
     Watch and custom glove-card adapters map into this frame.
     ``mount_extrinsic`` rotates sensor body → wrist anatomical frame (identity if unknown).
+    After ``devices.normalize_packet``, ``is_canonical`` is True and the stream is
+    expressed as right-handed lead-wrist anatomy with identity extrinsic.
     """
 
     fs_hz: float
@@ -40,6 +42,7 @@ class SensorFrame:
     handedness: Handedness = Handedness.RIGHT
     mount_extrinsic: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     device_id: str = "unknown"
+    is_canonical: bool = False
 
 
 @dataclass(frozen=True)

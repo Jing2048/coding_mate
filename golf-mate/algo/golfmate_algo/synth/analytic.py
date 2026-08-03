@@ -20,7 +20,7 @@ from numpy.typing import NDArray
 from scipy.special import erf
 
 from golfmate_algo.math import so3
-from golfmate_algo.types import ImuPacket, SensorFrame, SwingPhases, WristSide
+from golfmate_algo.types import Handedness, ImuPacket, SensorFrame, SwingPhases, WristSide
 
 ArrayF = NDArray[np.float64]
 
@@ -114,6 +114,7 @@ def planar_circular_swing(
     shock_ring_hz: float = 55.0,
     shock_decay_s: float = 0.012,
     g: float = G,
+    handedness: Handedness = Handedness.RIGHT,
 ) -> SyntheticSwing:
     """Generate a tilted-plane circular wrist swing with closed-form truth.
 
@@ -247,8 +248,29 @@ def planar_circular_swing(
     phases.validate_order()
 
     peak_idx = top_idx + int(np.argmax(np.abs(omega_s[top_idx : impact_idx + 1])))
+    # Device-frame packet: left-handed streams are expressed in left anatomy so
+    # ``normalize_packet`` recovers the canonical right-handed lead signals.
+    if handedness == Handedness.LEFT:
+        from golfmate_algo.devices.mirror import apply_linear_map, mirror_matrix
+
+        m = mirror_matrix(Handedness.LEFT, WristSide.LEAD)
+        gyro = apply_linear_map(gyro, m)
+        accel = apply_linear_map(accel, m)
+        pos = pos.copy()
+        pos[:, 1] *= -1.0
+        vel = vel.copy()
+        vel[:, 1] *= -1.0
+
     packet = ImuPacket(
-        frame=SensorFrame(fs_hz=fs_hz, wrist=WristSide.LEAD), t=t, gyro=gyro, accel=accel
+        frame=SensorFrame(
+            fs_hz=fs_hz,
+            wrist=WristSide.LEAD,
+            handedness=handedness,
+            is_canonical=False,
+        ),
+        t=t,
+        gyro=gyro,
+        accel=accel,
     )
     return SyntheticSwing(
         packet=packet,
@@ -269,5 +291,6 @@ def planar_circular_swing(
             "peak_to_impact_s": float(t[impact_idx] - t[peak_idx]),
             "a1": a1,
             "a2": a2,
+            "handedness": 0.0 if handedness == Handedness.RIGHT else 1.0,
         },
     )

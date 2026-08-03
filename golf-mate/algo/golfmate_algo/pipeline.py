@@ -15,8 +15,10 @@ from golfmate_algo.biomechanics.proxies import estimate_biomech_proxies
 from golfmate_algo.biomechanics.sequence import sequence_proxy
 from golfmate_algo.calib.crop_lite import crop_lite_correct
 from golfmate_algo.coach.diagnostics import diagnose
+from golfmate_algo.devices.normalize import normalize_packet
 from golfmate_algo.events.segmental import detect_phases_segmental
 from golfmate_algo.features.wrist import compute_wrist_features
+from golfmate_algo.reference.score import reference_finding, score_against_reference
 from golfmate_algo.signal.dynamic_range import split_dual_path
 from golfmate_algo.traj.dead_reckon import reconstruct_trajectory
 from golfmate_algo.traj.hybrid import estimate_hybrid_trajectory
@@ -31,6 +33,7 @@ def analyze_swing(
     prefer_vqf: bool = False,
     use_crop_lite: bool = True,
     use_dual_path: bool = True,
+    compare_to_ideal: bool = True,
 ) -> SwingReport:
     """Run the full analysis pipeline.
 
@@ -39,8 +42,12 @@ def analyze_swing(
     trajectory :
         ``"hybrid"`` (default) varying-centre lever + event constraints + plane
         closure; ``"lever_arm"`` rigid baseline; ``"dead_reckon"`` ZUPT integrate.
+
+    The packet is first passed through ``normalize_packet`` so Watch / glove /
+    left-handed streams share one canonical lead-right anatomical frame.
     """
     del prefer_vqf
+    packet, norm_info = normalize_packet(packet)
     fs = packet.frame.fs_hz
     dt = 1.0 / fs
 
@@ -139,6 +146,31 @@ def analyze_swing(
     findings = diagnose(features)
     seq = sequence_proxy(packet.t, gyro_c, phases)
 
+    ref_meta: dict = {}
+    if compare_to_ideal:
+        from golfmate_algo.types import SwingReport as _SR
+
+        _tmp = _SR(
+            phases=phases,
+            features=features,
+            findings=findings,
+            quats=quats,
+            positions=pos,
+            velocities=vel,
+            gate_open=np.asarray(ahrs_diag.get("gate", []), dtype=np.float64),
+        )
+        ref_score = score_against_reference(_tmp)
+        findings = list(findings) + [reference_finding(ref_score)]
+        ref_meta = {
+            "reference_score": {
+                "overall": ref_score.overall,
+                "confidence": ref_score.confidence,
+                "template_version": ref_score.template_version,
+                "is_proxy": True,
+                "per_feature": ref_score.per_feature,
+            },
+        }
+
     return SwingReport(
         phases=phases,
         features=features,
@@ -163,7 +195,19 @@ def analyze_swing(
                 "confidence": proxies.confidence,
                 "is_proxy": True,
             },
+            **ref_meta,
             "fs_hz": fs,
+            "device_id": packet.frame.device_id,
+            "frame": {
+                "handedness": packet.frame.handedness.value,
+                "wrist": packet.frame.wrist.value,
+                "is_canonical": bool(packet.frame.is_canonical),
+                "source_handedness": norm_info.source_handedness,
+                "source_wrist": norm_info.source_wrist,
+                "applied_extrinsic": float(norm_info.applied_extrinsic),
+                "applied_mirror": float(norm_info.applied_mirror),
+                "applied_resample": float(norm_info.applied_resample),
+            },
             "dual_path": dual.meta if dual is not None else {},
             "accel_ahrs_precompressed": float(
                 dual is not None and not np.allclose(accel_ahrs, accel_raw)

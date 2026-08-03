@@ -74,7 +74,7 @@ from scipy.special import beta as _beta_func
 from scipy.special import betainc as _betainc
 
 from golfmate_algo.math import so3
-from golfmate_algo.types import ImuPacket, SensorFrame, SwingPhases, WristSide
+from golfmate_algo.types import Handedness, ImuPacket, SensorFrame, SwingPhases, WristSide
 
 ArrayF = NDArray[np.float64]
 
@@ -276,6 +276,8 @@ class SwingConfig:
     mount_lever_arm: Optional[tuple[float, float, float]] = None
     # Extrinsic quaternion [w,x,y,z] mapping sensor frame -> mount-segment frame.
     mount_extrinsic_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    # Golfer handedness; LEFT streams are device-framed so normalize recovers RH.
+    handedness: Handedness = Handedness.RIGHT
 
     def total_s(self) -> float:
         return (
@@ -355,12 +357,23 @@ class SwingTruth:
 
     def to_imu_packet(self) -> ImuPacket:
         """Package the measured sensor signals as an :class:`ImuPacket`."""
+        gyro = self.gyro_body
+        accel = self.accel_body
+        handed = self.config.handedness
+        if handed == Handedness.LEFT:
+            from golfmate_algo.devices.mirror import apply_linear_map, mirror_matrix
+
+            m = mirror_matrix(Handedness.LEFT, WristSide.LEAD)
+            gyro = apply_linear_map(gyro, m)
+            accel = apply_linear_map(accel, m)
         frame = SensorFrame(
             fs_hz=float(self.config.fs_hz),
             wrist=WristSide.LEAD,
+            handedness=handed,
             mount_extrinsic=self.config.mount_extrinsic_quat,
+            is_canonical=False,
         )
-        return ImuPacket(frame=frame, t=self.t, gyro=self.gyro_body, accel=self.accel_body)
+        return ImuPacket(frame=frame, t=self.t, gyro=gyro, accel=accel)
 
     def kinematic_sequence_ok(self) -> bool:
         """True iff downswing speed peaks occur in proximal->distal time order."""

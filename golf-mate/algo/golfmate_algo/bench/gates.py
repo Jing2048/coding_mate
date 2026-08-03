@@ -110,6 +110,17 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
             if e_imp is not None and e_imp > 80.0:
                 violations.append(f"multisense impact MAE {e_imp:.1f} ms exceeds 80 ms")
 
+    elite = by.get("external_multisense_elite", {})
+    if elite.get("status") == "unavailable":
+        notes.append(
+            f"external_multisense_elite unavailable: {elite.get('reason', 'unknown')}"
+        )
+    elif elite.get("status") == "ok":
+        notes.append(
+            f"external_multisense_elite scored n={elite.get('n_swings')} "
+            f"(eval gate only, not in-product posture library)"
+        )
+
     # --- holdout seal ---
     hold = payload.get("holdout", {})
     if hold.get("enabled") and hold.get("mismatches"):

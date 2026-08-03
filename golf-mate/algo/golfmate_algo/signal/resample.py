@@ -34,5 +34,6 @@ def resample_packet(
             handedness=frame.handedness,
             mount_extrinsic=frame.mount_extrinsic,
             device_id=frame.device_id,
+            is_canonical=frame.is_canonical,
         )
     return ImuPacket(frame=frame, t=tg, gyro=g, accel=a)

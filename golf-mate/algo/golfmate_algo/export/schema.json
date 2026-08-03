@@ -1,0 +1,42 @@
+{
+  "contract_version": "swing-features-v1",
+  "description": "Versioned float feature vector shared by Watch / glove / Python for future Core ML export. No .mlmodel in this release.",
+  "future_path": "Train offline in Python → convert to Core ML; Watch consumes the same field order and units.",
+  "units": {
+    "tempo_s": "seconds",
+    "backswing_s": "seconds",
+    "downswing_s": "seconds",
+    "rhythm": "dimensionless (backswing/downswing)",
+    "peak_omega_rad_s": "rad/s",
+    "peak_omega_to_impact_s": "seconds",
+    "hand_speed_peak_m_s": "m/s",
+    "plane_angle_deg": "degrees",
+    "closure_rate_rad_s": "rad/s",
+    "x_factor_proxy_deg": "degrees (proxy)",
+    "sequence_score_proxy": "0..1 (proxy)",
+    "proxy_confidence": "0..1",
+    "reference_overall": "0..1 (proxy band score)",
+    "reference_confidence": "0..1",
+    "impact_idx_norm": "fraction of swing length",
+    "top_idx_norm": "fraction of swing length"
+  },
+  "features": [
+    "tempo_s",
+    "backswing_s",
+    "downswing_s",
+    "rhythm",
+    "peak_omega_rad_s",
+    "peak_omega_to_impact_s",
+    "hand_speed_peak_m_s",
+    "plane_angle_deg",
+    "closure_rate_rad_s",
+    "x_factor_proxy_deg",
+    "sequence_score_proxy",
+    "proxy_confidence",
+    "reference_overall",
+    "reference_confidence",
+    "impact_idx_norm",
+    "top_idx_norm"
+  ],
+  "normalization_notes": "Values are physical units after devices.normalize_packet (canonical lead-right anatomy). Do not re-mirror on-device."
+}

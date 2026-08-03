@@ -1,0 +1,101 @@
+{
+  "version": "multisense-elite-v1",
+  "doi": "10.7910/DVN/LCCLLW",
+  "selection": "Professional License == Yes OR Self-Reported Expertise Level >= 5",
+  "role": "external_eval_gate_only",
+  "disclaimer": "Elite mocap-derived IMU subset for zero-trust gates \u2014 not an in-product ideal posture library.",
+  "subjects": [
+    {
+      "subject_id": "Sub13",
+      "professional_license": false,
+      "expertise_likert": 5,
+      "years_experience": "3 to 5 years",
+      "license_type": "-",
+      "handedness": "Right"
+    },
+    {
+      "subject_id": "Sub16",
+      "professional_license": false,
+      "expertise_likert": 5,
+      "years_experience": "3 to 5 years",
+      "license_type": "-",
+      "handedness": "Right"
+    },
+    {
+      "subject_id": "Sub17",
+      "professional_license": true,
+      "expertise_likert": 6,
+      "years_experience": "More than 10 years",
+      "license_type": "USGTF Teaching Professional",
+      "handedness": "Right"
+    },
+    {
+      "subject_id": "Sub18",
+      "professional_license": true,
+      "expertise_likert": 4,
+      "years_experience": "More than 10 years",
+      "license_type": "KTPGA Teaching Professional",
+      "handedness": "Right"
+    },
+    {
+      "subject_id": "Sub19",
+      "professional_license": true,
+      "expertise_likert": 7,
+      "years_experience": "More than 10 years",
+      "license_type": "KPGA Associate Member",
+      "handedness": "Right"
+    },
+    {
+      "subject_id": "Sub20",
+      "professional_license": true,
+      "expertise_likert": 7,
+      "years_experience": "More than 10 years",
+      "license_type": "KPGA Associate Member,  USGTF Teaching Professional",
+      "handedness": "Right"
+    },
+    {
+      "subject_id": "Sub21",
+      "professional_license": true,
+      "expertise_likert": 4,
+      "years_experience": "3 to 5 years",
+      "license_type": "USGTF Teaching Professional",
+      "handedness": "Right"
+    },
+    {
+      "subject_id": "Sub22",
+      "professional_license": true,
+      "expertise_likert": 6,
+      "years_experience": "More than 10 years",
+      "license_type": "USGTF Teaching Professional",
+      "handedness": "Right"
+    },
+    {
+      "subject_id": "Sub23",
+      "professional_license": true,
+      "expertise_likert": 7,
+      "years_experience": "More than 10 years",
+      "license_type": "KLPGA Associate Member",
+      "handedness": "Right"
+    },
+    {
+      "subject_id": "Sub24",
+      "professional_license": true,
+      "expertise_likert": 4,
+      "years_experience": "More than 10 years",
+      "license_type": "USGTF Teaching Professional",
+      "handedness": "Right"
+    }
+  ],
+  "subject_ids": [
+    "Sub13",
+    "Sub16",
+    "Sub17",
+    "Sub18",
+    "Sub19",
+    "Sub20",
+    "Sub21",
+    "Sub22",
+    "Sub23",
+    "Sub24"
+  ]
+}
