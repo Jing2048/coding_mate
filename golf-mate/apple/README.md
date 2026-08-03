@@ -40,6 +40,19 @@ brew install xcodegen
 open GolfAiJing.xcodeproj
 ```
 
+### Xcode Cloud
+
+Workflow start condition should use branch **`main`**.
+
+| Setting | Value |
+|---------|--------|
+| Project | `golf-mate/apple/GolfAiJing.xcodeproj` (generated in `ci_post_clone`) |
+| Scheme | `Golf-ai-Jing` |
+| Post-clone | `golf-mate/apple/ci_scripts/ci_post_clone.sh` |
+
+Xcode Cloud discovers `ci_scripts/` next to the Xcode project after clone; the script runs
+`xcodegen generate` so the `.xcodeproj` does not need to be committed.
+
 ### Fix: `WKCompanionAppBundleIdentifier` mismatch
 
 If Xcode reports:
