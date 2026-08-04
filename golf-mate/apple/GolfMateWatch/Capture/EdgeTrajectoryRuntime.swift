@@ -18,7 +18,9 @@ final class EdgeTrajectoryRuntime {
     private static let quietOmegaRadS: Double = 0.55
     private static let rushAngularAccelRadS2: Double = 95
 
+    private let student = EdgeCoreMLStudent()
     private var points: [TrajectoryPoint] = []
+    private var imuSamples: [EdgeIMUSample] = []
     private var latenciesMs: [Float] = []
     private var origin: TrajectoryPoint?
     private var startedAt: TimeInterval?
@@ -32,11 +34,13 @@ final class EdgeTrajectoryRuntime {
 
     init() {
         points.reserveCapacity(Self.maxSamples)
+        imuSamples.reserveCapacity(Self.maxSamples)
         latenciesMs.reserveCapacity(Self.maxSamples)
     }
 
     func reset() {
         points.removeAll(keepingCapacity: true)
+        imuSamples.removeAll(keepingCapacity: true)
         latenciesMs.removeAll(keepingCapacity: true)
         origin = nil
         startedAt = nil
@@ -58,6 +62,26 @@ final class EdgeTrajectoryRuntime {
                 + motion.rotationRate.y * motion.rotationRate.y
                 + motion.rotationRate.z * motion.rotationRate.z
         )
+        if imuSamples.count < Self.maxSamples {
+            imuSamples.append(
+                EdgeIMUSample(
+                    timestamp: motion.timestamp,
+                    gyro: SIMD3(
+                        motion.rotationRate.x,
+                        motion.rotationRate.y,
+                        motion.rotationRate.z
+                    ),
+                    accel: SIMD3(
+                        (motion.gravity.x + motion.userAcceleration.x)
+                            * GolfMateCaptureContract.standardGravity,
+                        (motion.gravity.y + motion.userAcceleration.y)
+                            * GolfMateCaptureContract.standardGravity,
+                        (motion.gravity.z + motion.userAcceleration.z)
+                            * GolfMateCaptureContract.standardGravity
+                    )
+                )
+            )
+        }
         if startedAt == nil, omega >= Self.activeOmegaRadS {
             startedAt = motion.timestamp
         }
@@ -115,7 +139,43 @@ final class EdgeTrajectoryRuntime {
     }
 
     func finalize() -> EdgeTrajectoryPreview {
-        makePreview(final: true)
+        let base = makePreview(final: true)
+        let inferenceStart = ContinuousClock.now
+        guard
+            let prediction = student.predict(samples: imuSamples),
+            prediction.points.count == base.points.count
+        else { return base }
+        let latency = inferenceStart.duration(to: .now)
+        latenciesMs.append(
+            Float(
+                Double(latency.components.seconds) * 1_000
+                    + Double(latency.components.attoseconds) / 1e15
+            )
+        )
+
+        // Until optical-aligned device validation closes, the distilled model
+        // is a bounded correction to the causal kinematic path, never the sole
+        // geometric truth.
+        let blend = min(0.30, 0.30 * prediction.confidence)
+        let corrected = zip(base.points, prediction.points).map { causal, model in
+            TrajectoryPoint(
+                x: causal.x + blend * (model.x - causal.x),
+                y: causal.y + blend * (model.y - causal.y),
+                z: causal.z + blend * (model.z - causal.z)
+            )
+        }
+        return EdgeTrajectoryPreview(
+            version: EdgeTrajectoryContract.version,
+            points: corrected,
+            confidence: min(
+                0.90,
+                max(base.confidence * 0.90, prediction.confidence * 0.65)
+            ),
+            quality: min(base.quality, prediction.confidence),
+            transitionRush: max(transitionRush, prediction.transitionRush),
+            inferenceP95Ms: percentile95(latenciesMs),
+            source: "watch_coreml_student_blend"
+        )
     }
 
     private func makePreview(final: Bool) -> EdgeTrajectoryPreview {

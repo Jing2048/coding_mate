@@ -11,16 +11,16 @@
   ],
   "output_dim": 198,
   "trajectory_points": 64,
-  "numpy_artifact": "/workspace/golf-mate/algo/golfmate_algo/export/artifacts/edge_trajectory_student_v1.npz",
+  "numpy_artifact": "edge_trajectory_student_v1.npz",
   "numpy_artifact_present": true,
   "train_seed": 0,
   "n_train": 24,
   "schema_contract_version": "edge-trajectory-v1",
   "coreml": {
-    "ok": false,
-    "skipped": true,
-    "reason": "numpy-only flag set",
-    "mlmodel_path": null
+    "ok": true,
+    "skipped": false,
+    "reason": null,
+    "mlmodel_path": "edge_trajectory_v1.mlpackage"
   },
-  "coreml_model_present": false
+  "coreml_model_present": true
 }

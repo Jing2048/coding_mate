@@ -14,20 +14,24 @@ Bundle IDs (unique; `GolfMate` is taken on App Store Connect):
 ```text
 Apple Watch
   HKWorkoutSession
-  ├─ high_rate (Series 8 / Ultra+): CMBatchedSensorManager → ~800 Hz ACC + ~200 Hz Motion
-  └─ compat    (Series 5+):         CMMotionManager         → ~100 Hz ACC + ~100 Hz Motion
-        ↓ lossless golfmate-watch-capture-v1 JSON (+ captureMode)
-  WCSession.transferFile
-        ↓
-iPhone Documents/GolfMateCaptures
-        ↓
-python scripts/analyze_watch_capture.py capture.json
-        ↓ full Golf Mate pipeline
+  ├─ live rail: CMMotionManager 100 Hz → Core ML/kinematic preview + haptic
+  │     └─ PreviewPacketV1 → sendMessageData (queued fallback)
+  └─ fidelity rail
+        ├─ Series 8 / Ultra+: CMBatchedSensorManager ~800 ACC / ~200 Motion
+        └─ Series 5 compat:  CMMotionManager ~100 ACC / ~100 Motion
+              ↓ PackedCaptureV2 + CRC
+          transferFile (retained until iPhone ACK)
+              ↓
+          iPhone PROVISIONAL preview → full Python analyze_swing → FINAL path
 ```
 
 Dense accel (≥400 Hz) is never discarded and can drive a sub-frame impact hint.
 Compat captures still run the full pipeline; Impact timing falls back to the
 segmental detector (no fake 800 Hz claim).
+
+The Watch preview is an address-relative **lead-wrist path**, explicitly labeled
+`PROVISIONAL`. It is replaced by the quality-gated full-pipeline trajectory.
+See [`docs/research/09_extreme_watch_edge.md`](../docs/research/09_extreme_watch_edge.md).
 
 ## Generate the Xcode project
 

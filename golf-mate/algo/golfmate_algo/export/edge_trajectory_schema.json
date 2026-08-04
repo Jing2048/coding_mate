@@ -1,6 +1,6 @@
 {
   "contract_version": "edge-trajectory-v1",
-  "description": "On-device Apple Watch edge trajectory contract. Fixed 100 Hz IMU input; outputs phases, 64-point XYZ trajectory, confidence, and transition_rush. NumPy teacher/student baseline ships on Linux; Core ML conversion is Mac-only via export script.",
+  "description": "On-device Apple Watch edge trajectory contract. Fixed 100 Hz IMU input; outputs phases, 64-point XYZ trajectory, confidence, and transition_rush. NumPy teacher/student and Core ML package share this contract.",
   "input": {
     "fs_hz": 100.0,
     "channels": ["gyro_x", "gyro_y", "gyro_z", "accel_x", "accel_y", "accel_z"],
@@ -53,7 +53,7 @@
       "train_seed",
       "n_train"
     ],
-    "coreml": "Optional; produced only when coremltools is available (macOS). Absence of a .mlmodel does not imply export failure of the NumPy artifact."
+    "coreml": "edge_trajectory_v1.mlpackage; specification version 7, input features[1,29], output edge_outputs[1,198]."
   },
-  "future_path": "Train/distill offline in Python → scripts/export_edge_trajectory_coreml.py → Core ML on Mac → Watch student inference for preview; iPhone/Mac Python remains final authority."
+  "runtime": "Watch blends the student as a bounded correction to causal kinematic preview; iPhone/Mac Python remains final authority."
 }

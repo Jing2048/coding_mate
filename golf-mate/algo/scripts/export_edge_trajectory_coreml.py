@@ -42,8 +42,8 @@ def _try_coreml_export(npz_path: Path, mlmodel_path: Path) -> dict:
         }
 
     try:
-        import coremltools.converters.mil as mil  # type: ignore
         from coremltools.converters.mil import Builder as mb  # type: ignore
+        from coremltools.converters.mil.mil import types  # type: ignore
     except Exception as exc:  # noqa: BLE001
         return {
             "ok": False,
@@ -59,28 +59,28 @@ def _try_coreml_export(npz_path: Path, mlmodel_path: Path) -> dict:
     mean = student.feat_mean.astype("float32")
     std = student.feat_std.astype("float32")
 
-    # Minimal MIL program: y = W @ ((x - mean) / std) + b
-    # Input is the *feature* vector (not raw IMU) so Watch can share Python
-    # feature extraction or replace it later with a fused graph.
-    @mb.program(
-        input_specs=[
-            mb.TensorSpec(shape=(1, feat_dim), dtype=mil.types.fp32, name="features")
-        ]
-    )
-    def edge_prog(features):  # noqa: ANN001
-        x = mb.sub(x=features, y=mean.reshape(1, -1), name="centered")
-        x = mb.real_div(x=x, y=std.reshape(1, -1), name="normalized")
-        # (1, F) @ (F, Out) — use matmul with transposed W
-        y = mb.matmul(x=x, y=W.T, name="linear")
-        y = mb.add(x=y, y=b.reshape(1, -1), name="edge_outputs")
-        return y
-
     try:
+        # Minimal MIL program: y = W @ ((x - mean) / std) + b.
+        # The function argument names the Core ML input in current MIL APIs.
+        @mb.program(
+            input_specs=[
+                mb.TensorSpec(shape=(1, feat_dim), dtype=types.fp32)
+            ]
+        )
+        def edge_prog(features):  # noqa: ANN001
+            x = mb.sub(x=features, y=mean.reshape(1, -1), name="centered")
+            x = mb.real_div(x=x, y=std.reshape(1, -1), name="normalized")
+            y = mb.matmul(x=x, y=W.T, name="linear")
+            y = mb.add(x=y, y=b.reshape(1, -1), name="edge_outputs")
+            return y
+
         mlmodel = ct.convert(
             edge_prog,
             convert_to="mlprogram",
             compute_units=ct.ComputeUnit.ALL,
-            minimum_deployment_target=ct.target.watchOS8,
+            # coremltools exposes spec targets by iOS generation. iOS16 maps
+            # to Core ML specification 7, supported by our watchOS 10 target.
+            minimum_deployment_target=ct.target.iOS16,
         )
         mlmodel.author = "Golf Mate"
         mlmodel.short_description = (
@@ -92,7 +92,7 @@ def _try_coreml_export(npz_path: Path, mlmodel_path: Path) -> dict:
             "ok": True,
             "skipped": False,
             "reason": None,
-            "mlmodel_path": str(mlmodel_path),
+            "mlmodel_path": mlmodel_path.name,
         }
     except Exception as exc:  # noqa: BLE001 - conversion is best-effort
         return {
@@ -158,7 +158,7 @@ def main() -> int:
         "input_channels": list(INPUT_CHANNELS),
         "output_dim": OUTPUT_DIM,
         "trajectory_points": TRAJECTORY_POINTS,
-        "numpy_artifact": str(npz_path),
+        "numpy_artifact": npz_path.name,
         "numpy_artifact_present": npz_path.is_file(),
         "train_seed": student.train_seed,
         "n_train": student.n_train,
