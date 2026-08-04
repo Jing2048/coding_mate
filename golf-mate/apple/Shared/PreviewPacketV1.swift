@@ -12,7 +12,7 @@ struct PreviewPacketV1: Sendable {
         guard preview.points.count == EdgeTrajectoryContract.pointCount else {
             throw PackedCaptureV2.CodecError.invalidPreview
         }
-        var data = Data(capacity: 812)
+        var data = Data(capacity: 820)
         data.append(Self.magic)
         data.appendInteger(Self.version)
         data.appendInteger(UInt16(0))

@@ -120,7 +120,9 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         let endDate = Date()
         workoutSession?.end()
         workoutBuilder?.endCollection(withEnd: endDate) { [weak self] _, _ in
-            self?.workoutBuilder?.finishWorkout { _, _ in }
+            Task { @MainActor in
+                self?.workoutBuilder?.finishWorkout { _, _ in }
+            }
         }
 
         Task {
@@ -227,7 +229,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             do {
                 for try await batch in batchedSensors.deviceMotionUpdates() {
                     if Task.isCancelled { break }
-                    let samples = batch.map { self.deviceMotionSample(from: $0) }
+                    let samples = batch.map { Self.deviceMotionSample(from: $0) }
                     try await buffer.appendDeviceMotion(samples)
                     let counts = await buffer.counts()
                     deviceMotionSamples = counts.deviceMotion
@@ -247,10 +249,10 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         motionManager.accelerometerUpdateInterval = interval
         motionManager.deviceMotionUpdateInterval = interval
 
+        let sensorBuffer = buffer
         motionManager.startAccelerometerUpdates(to: motionQueue) { [weak self] data, error in
-            guard let self else { return }
             if let error {
-                Task { @MainActor in self.failCapture(error) }
+                Task { @MainActor in self?.failCapture(error) }
                 return
             }
             guard let data else { return }
@@ -260,13 +262,19 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                 y: data.acceleration.y,
                 z: data.acceleration.z
             )
-            Task { @MainActor in
+            Task {
                 do {
-                    try await self.buffer.appendAccelerometer([sample])
-                    let counts = await self.buffer.counts()
-                    self.accelerometerSamples = counts.accelerometer
+                    try await sensorBuffer.appendAccelerometer([sample])
+                    let counts = await sensorBuffer.counts()
+                    if counts.accelerometer.isMultiple(of: 10) {
+                        await MainActor.run {
+                            self?.accelerometerSamples = counts.accelerometer
+                        }
+                    }
                 } catch {
-                    self.failCapture(error)
+                    await MainActor.run {
+                        self?.failCapture(error)
+                    }
                 }
             }
         }
@@ -275,21 +283,25 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             using: .xArbitraryZVertical,
             to: motionQueue
         ) { [weak self] data, error in
-            guard let self else { return }
             if let error {
-                Task { @MainActor in self.failCapture(error) }
+                Task { @MainActor in self?.failCapture(error) }
                 return
             }
             guard let data else { return }
-            let sample = self.deviceMotionSample(from: data)
-            Task { @MainActor in
+            let sample = Self.deviceMotionSample(from: data)
+            Task {
                 do {
-                    try await self.buffer.appendDeviceMotion([sample])
-                    let counts = await self.buffer.counts()
-                    self.deviceMotionSamples = counts.deviceMotion
-                    self.consumeLivePreview(data)
+                    try await sensorBuffer.appendDeviceMotion([sample])
+                    let counts = await sensorBuffer.counts()
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.deviceMotionSamples = counts.deviceMotion
+                        self.consumeLivePreview(data)
+                    }
                 } catch {
-                    self.failCapture(error)
+                    await MainActor.run {
+                        self?.failCapture(error)
+                    }
                 }
             }
         }
@@ -312,6 +324,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     }
 
     private func consumeLivePreview(_ motion: CMDeviceMotion) {
+        guard state == .recording else { return }
         let update = edgeRuntime.consume(motion)
         livePreviewSampleCounter += 1
         if livePreviewSampleCounter.isMultiple(of: 5) || update.shouldCueTransitionRush {
@@ -377,7 +390,9 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         )
     }
 
-    private func deviceMotionSample(from motion: CMDeviceMotion) -> DeviceMotionSample {
+    nonisolated private static func deviceMotionSample(
+        from motion: CMDeviceMotion
+    ) -> DeviceMotionSample {
         let q = motion.attitude.quaternion
         return DeviceMotionSample(
             timestamp: motion.timestamp,
