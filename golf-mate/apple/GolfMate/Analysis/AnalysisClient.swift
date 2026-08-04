@@ -59,7 +59,12 @@ final class AnalysisClient: ObservableObject {
 
             var request = URLRequest(url: endpoint)
             request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(
+                url.pathExtension == "gmpc"
+                    ? "application/x-golfmate-packed-v2"
+                    : "application/json",
+                forHTTPHeaderField: "Content-Type"
+            )
             request.timeoutInterval = 60
             request.httpBody = data
 

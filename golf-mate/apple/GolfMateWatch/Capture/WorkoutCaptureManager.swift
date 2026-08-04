@@ -22,6 +22,8 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     @Published private(set) var deviceMotionSamples = 0
     @Published private(set) var lastCaptureURL: URL?
     @Published private(set) var startedAt: Date?
+    @Published private(set) var edgePreview = EdgeTrajectoryPreview.empty
+    @Published private(set) var hapticEnqueueLatencyMs: Float = 0
     /// Target / requested rates shown in the UI before a capture finishes.
     @Published private(set) var displayAccelerometerHz = 800
     @Published private(set) var displayDeviceMotionHz = 200
@@ -36,11 +38,14 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         return queue
     }()
     private let buffer = SensorRingBuffer()
+    private let edgeRuntime = EdgeTrajectoryRuntime()
+    private let hapticPolicy = HapticPolicy()
     private var workoutSession: HKWorkoutSession?
     private var workoutBuilder: HKLiveWorkoutBuilder?
     private var accelerometerTask: Task<Void, Never>?
     private var deviceMotionTask: Task<Void, Never>?
     private var sessionID = UUID()
+    private var livePreviewSampleCounter = 0
 
     /// Series 8 / Ultra+ high-rate path.
     var highRateSupported: Bool {
@@ -89,6 +94,11 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         deviceMotionSamples = 0
         lastCaptureURL = nil
         startedAt = Date()
+        edgeRuntime.reset()
+        hapticPolicy.reset()
+        edgePreview = .empty
+        hapticEnqueueLatencyMs = 0
+        livePreviewSampleCounter = 0
 
         Task {
             do {
@@ -104,6 +114,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     func stop() {
         guard state == .recording else { return }
         state = .processing
+        edgePreview = edgeRuntime.finalize()
         stopSensorStreams()
 
         let endDate = Date()
@@ -134,6 +145,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         guard !isRecording else { return }
         state = .idle
         startedAt = nil
+        edgePreview = .empty
         refreshCapability()
     }
 
@@ -175,6 +187,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             captureMode = .highRate
             displayAccelerometerHz = 800
             displayDeviceMotionHz = 200
+            startLivePreviewStream()
             startHighRateStreams()
         } else {
             captureMode = .compat
@@ -274,10 +287,39 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                     try await self.buffer.appendDeviceMotion([sample])
                     let counts = await self.buffer.counts()
                     self.deviceMotionSamples = counts.deviceMotion
+                    self.consumeLivePreview(data)
                 } catch {
                     self.failCapture(error)
                 }
             }
+        }
+    }
+
+    /// Series 8+ keeps the low-latency 100 Hz rail active alongside the
+    /// 800/200 Hz batched fidelity rail. Failure only removes preview/haptics;
+    /// it must never abort the lossless capture.
+    private func startLivePreviewStream() {
+        motionManager.deviceMotionUpdateInterval = 1.0 / 100.0
+        motionManager.startDeviceMotionUpdates(
+            using: .xArbitraryZVertical,
+            to: motionQueue
+        ) { [weak self] data, _ in
+            guard let self, let data else { return }
+            Task { @MainActor in
+                self.consumeLivePreview(data)
+            }
+        }
+    }
+
+    private func consumeLivePreview(_ motion: CMDeviceMotion) {
+        let update = edgeRuntime.consume(motion)
+        livePreviewSampleCounter += 1
+        if livePreviewSampleCounter.isMultiple(of: 5) || update.shouldCueTransitionRush {
+            edgePreview = update.preview
+        }
+        if update.shouldCueTransitionRush {
+            hapticPolicy.cueTransitionRush()
+            hapticEnqueueLatencyMs = hapticPolicy.enqueueLatencyMs
         }
     }
 
@@ -327,6 +369,9 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                 accelerometerHz: accelHz,
                 deviceMotionHz: motionHz
             ),
+            preview: edgePreview.points.count == EdgeTrajectoryContract.pointCount
+                ? edgePreview
+                : nil,
             accelerometer800Hz: snapshot.accelerometer,
             deviceMotion200Hz: snapshot.deviceMotion
         )

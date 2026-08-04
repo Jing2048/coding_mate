@@ -10,6 +10,18 @@ struct TransferStatusView: View {
                 VStack(spacing: 20) {
                     header
                     serverCard
+                    if
+                        analysis.lastResult == nil,
+                        let preview = receiver.latestPreview,
+                        !preview.points.isEmpty
+                    {
+                        TrajectoryPathView(
+                            points: preview.points,
+                            title: "领先腕即时轨迹",
+                            confidence: preview.confidence,
+                            provisional: true
+                        )
+                    }
                     captureCard
                     if let result = analysis.lastResult {
                         NavigationLink {
@@ -126,6 +138,7 @@ struct TransferStatusView: View {
     private var title: String {
         if analysis.isAnalyzing { return "完整算法分析中" }
         if analysis.lastResult != nil { return "分析完成" }
+        if receiver.latestPreview != nil { return "即时轨迹已到达" }
         if receiver.latestCaptureURL != nil { return "采集已到达" }
         return "等待 Watch"
     }

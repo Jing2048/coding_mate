@@ -10,6 +10,8 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
     @Published private(set) var latestCaptureMode: String?
     @Published private(set) var latestAccelerometerHz: Double?
     @Published private(set) var latestDeviceMotionHz: Double?
+    @Published private(set) var latestPreview: EdgeTrajectoryPreview?
+    @Published private(set) var latestPreviewSessionID: String?
     @Published private(set) var errorMessage: String?
 
     private override init() {
@@ -37,7 +39,11 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
         do {
             let captures = try captureDirectory()
             let name = (file.metadata?["sessionID"] as? String) ?? UUID().uuidString
-            let destination = captures.appendingPathComponent("\(name).json")
+            let isPacked = file.metadata?["schemaVersion"] as? String
+                == GolfMateCaptureContract.packedSchemaVersion
+            let destination = captures.appendingPathComponent(
+                "\(name).\(isPacked ? "gmpc" : "json")"
+            )
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
             }
@@ -51,6 +57,38 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
                 self.latestCaptureMode = mode
                 self.latestAccelerometerHz = accelHz
                 self.latestDeviceMotionHz = motionHz
+                self.errorMessage = nil
+            }
+            session.transferUserInfo([
+                "kind": "capture-ack-v2",
+                "sessionID": name,
+            ])
+        } catch {
+            DispatchQueue.main.async {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
+        receivePreview(messageData)
+    }
+
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        guard
+            userInfo["kind"] as? String == "preview-v1",
+            let data = userInfo["data"] as? Data
+        else { return }
+        receivePreview(data)
+    }
+
+    private func receivePreview(_ data: Data) {
+        do {
+            let packet = try PreviewPacketV1.decode(data)
+            DispatchQueue.main.async {
+                self.latestPreview = packet.preview
+                self.latestPreviewSessionID = packet.sessionID.uuidString
+                self.latestCaptureMode = packet.captureMode.rawValue
                 self.errorMessage = nil
             }
         } catch {

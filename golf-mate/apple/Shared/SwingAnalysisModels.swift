@@ -3,11 +3,15 @@ import Foundation
 struct SwingAnalysisResult: Codable, Sendable {
     let schemaVersion: String
     let ok: Bool
+    let captureMode: String?
     let sourceRatesHz: SourceRates?
     let highRateImpactHintS: Double?
     let phases: PhaseIndices?
     let features: FeatureBundle?
     let findings: [Finding]?
+    let finalTrajectory: [[Double]]?
+    let trajectoryConfidence: Double?
+    let trajectoryQuality: TrajectoryQuality?
     let meta: AnalysisMeta?
     let error: String?
 
@@ -47,5 +51,24 @@ struct SwingAnalysisResult: Codable, Sendable {
         let impact_method: String?
         let impact_confidence: Double?
         let fs_hz: Double?
+    }
+
+    struct TrajectoryQuality: Codable, Sendable {
+        let confidence: Double?
+        let validity: String?
+        let reasons: [String]?
+        let pointCount: Int?
+        let source: String?
+    }
+
+    var finalTrajectoryPoints: [TrajectoryPoint] {
+        (finalTrajectory ?? []).compactMap { values in
+            guard values.count == 3 else { return nil }
+            return TrajectoryPoint(
+                x: Float(values[0]),
+                y: Float(values[1]),
+                z: Float(values[2])
+            )
+        }
     }
 }

@@ -9,7 +9,10 @@ struct SwingCaptureView: View {
             VStack(spacing: 0) {
                 rateHeader
                 ZStack {
-                    SwingMotionField(active: capture.isRecording)
+                    SwingMotionField(
+                        active: capture.isRecording,
+                        points: capture.edgePreview.points
+                    )
                     centerStatus
                 }
                 .frame(maxHeight: .infinity)
@@ -56,6 +59,11 @@ struct SwingCaptureView: View {
                     .padding(.vertical, 3)
                     .background(Color.orange.opacity(0.22), in: Capsule())
                     .foregroundStyle(.orange)
+            }
+            if !capture.edgePreview.points.isEmpty {
+                Text("PROVISIONAL")
+                    .font(.system(size: 6, weight: .bold, design: .rounded))
+                    .foregroundStyle(.cyan)
             }
             Spacer(minLength: 2)
             Circle()
@@ -193,7 +201,11 @@ struct SwingCaptureView: View {
                 ? "抬腕开始 · Series 5 兼容约 100 Hz"
                 : "抬腕开始 · 800/200 全速双流"
         case .ready:
-            "\(capture.accelerometerSamples) ACC · \(capture.deviceMotionSamples) MOTION"
+            String(
+                format: "%d ACC · PATH %.0f%%",
+                capture.accelerometerSamples,
+                capture.edgePreview.confidence * 100
+            )
         case let .failed(message): message
         case .unsupported: "Core Motion 不可用"
         default: ""

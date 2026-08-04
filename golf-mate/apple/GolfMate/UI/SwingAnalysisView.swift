@@ -7,6 +7,14 @@ struct SwingAnalysisView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 fidelityBanner
+                if !result.finalTrajectoryPoints.isEmpty {
+                    TrajectoryPathView(
+                        points: result.finalTrajectoryPoints,
+                        title: "完整算法精修轨迹",
+                        confidence: Float(result.trajectoryConfidence ?? 0),
+                        provisional: false
+                    )
+                }
                 metricGrid
                 phaseRow
                 if let findings = result.findings, !findings.isEmpty {

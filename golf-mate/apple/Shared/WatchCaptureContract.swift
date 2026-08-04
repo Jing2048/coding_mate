@@ -2,6 +2,7 @@ import Foundation
 
 enum GolfMateCaptureContract {
     static let schemaVersion = "golfmate-watch-capture-v1"
+    static let packedSchemaVersion = "golfmate-watch-capture-v2"
     static let standardGravity = 9.80665
 }
 
@@ -59,6 +60,7 @@ struct WatchCapturePayload: Codable, Sendable {
     let mountExtrinsicWXYZ: [Double]
     let captureMode: CaptureMode
     let device: CaptureDevice
+    let preview: EdgeTrajectoryPreview?
     /// Native accelerometer samples in g. Field name kept for schema v1;
     /// actual Hz is in ``device.accelerometerHz`` (800 high-rate / ~100 compat).
     let accelerometer800Hz: [Vector3Sample]
