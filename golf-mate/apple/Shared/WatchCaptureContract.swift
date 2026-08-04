@@ -5,6 +5,13 @@ enum GolfMateCaptureContract {
     static let standardGravity = 9.80665
 }
 
+/// Hardware capture path. High-rate needs Series 8 / Ultra+;
+/// compat covers Series 5 (and other watches with Core Motion only).
+enum CaptureMode: String, Codable, Sendable {
+    case highRate = "high_rate"
+    case compat = "compat"
+}
+
 struct Vector3: Codable, Sendable {
     let x: Double
     let y: Double
@@ -37,6 +44,7 @@ struct DeviceMotionSample: Codable, Sendable {
 struct CaptureDevice: Codable, Sendable {
     let model: String
     let systemVersion: String
+    /// Measured sample rate from the capture timestamps (not a hard claim).
     let accelerometerHz: Double
     let deviceMotionHz: Double
 }
@@ -49,10 +57,13 @@ struct WatchCapturePayload: Codable, Sendable {
     let handedness: String
     let wrist: String
     let mountExtrinsicWXYZ: [Double]
+    let captureMode: CaptureMode
     let device: CaptureDevice
-    /// Native CMBatchedSensorManager samples in g; never downsampled.
+    /// Native accelerometer samples in g. Field name kept for schema v1;
+    /// actual Hz is in ``device.accelerometerHz`` (800 high-rate / ~100 compat).
     let accelerometer800Hz: [Vector3Sample]
-    /// Native 200 Hz device motion; rotation rate is rad/s.
+    /// Native Device Motion samples; rotation rate is rad/s. Actual Hz is in
+    /// ``device.deviceMotionHz`` (200 high-rate / ~100 compat).
     let deviceMotion200Hz: [DeviceMotionSample]
 
     var duration: TimeInterval {

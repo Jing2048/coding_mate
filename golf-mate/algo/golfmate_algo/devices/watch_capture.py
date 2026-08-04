@@ -1,9 +1,14 @@
 """Apple Watch ``golfmate-watch-capture-v1`` adapter.
 
-The Watch keeps native 800 Hz accelerometer and 200 Hz Device Motion streams.
-This adapter aligns raw acceleration onto the 200 Hz AHRS grid without deleting
-the high-rate sidecar, and exposes a sub-frame collision timestamp to the
-pipeline via ``impact_hint_s``.
+Supports two hardware paths written by the Watch app:
+
+* ``high_rate`` — Series 8 / Ultra+: native ~800 Hz accel + ~200 Hz Device Motion
+* ``compat`` — Series 5 and other watches: CMMotionManager ~100 Hz dual stream
+
+Field names ``accelerometer800Hz`` / ``deviceMotion200Hz`` are schema v1 labels;
+actual rates live in ``device.accelerometerHz`` / ``device.deviceMotionHz``.
+High-rate captures keep the dense accel sidecar for sub-frame impact hints.
+Compat captures still run the full ``analyze_swing`` pipeline without that hint.
 """
 
 from __future__ import annotations
@@ -27,6 +32,11 @@ from golfmate_algo.types import (
 
 SCHEMA_VERSION = "golfmate-watch-capture-v1"
 G0 = 9.80665
+# High-rate Device Motion is ~200 Hz; Series 5 compat is typically ~50–100 Hz.
+_MOTION_FS_MIN = 40.0
+_MOTION_FS_MAX = 240.0
+# Sub-frame impact hint needs a denser accel stream than the AHRS grid.
+_HIGH_RATE_ACCEL_FS_MIN = 400.0
 
 
 @dataclass(frozen=True)
@@ -36,17 +46,30 @@ class WatchCapture:
     accel_g_800: np.ndarray
     metadata: dict[str, Any]
 
+    @property
+    def capture_mode(self) -> str:
+        mode = self.metadata.get("captureMode")
+        if mode in {"high_rate", "compat"}:
+            return str(mode)
+        # Legacy payloads without captureMode: infer from measured accel rate.
+        if _median_fs(self.accel_t_800) >= _HIGH_RATE_ACCEL_FS_MIN:
+            return "high_rate"
+        return "compat"
+
     def high_rate_impact_time_s(self) -> float | None:
-        """Return collision timestamp from the native 800 Hz stream.
+        """Return collision timestamp from a dense native accel stream.
 
         Search starts near peak wrist rate after Top to reject backswing/release
         transients. Thresholding uses only the post-peak score so an early,
         stronger casting spike cannot suppress the actual strike.
+
+        Compat (~100 Hz) captures return ``None``; the segmental detector then
+        owns impact timing without a false high-rate claim.
         """
         if self.accel_t_800.size < 40 or self.packet.t.size < 20:
             return None
         fs_800 = _median_fs(self.accel_t_800)
-        if fs_800 < 400.0:
+        if fs_800 < _HIGH_RATE_ACCEL_FS_MIN:
             return None
 
         phases = detect_phases_segmental(
@@ -85,7 +108,7 @@ class WatchCapture:
         return float(self.accel_t_800[best])
 
     def analyze(self, **kwargs: Any) -> SwingReport:
-        """Run the unchanged precision pipeline with the 800 Hz impact hint."""
+        """Run the unchanged precision pipeline with an optional impact hint."""
         return analyze_swing(
             self.packet,
             impact_hint_s=self.high_rate_impact_time_s(),
@@ -103,7 +126,7 @@ def load_watch_capture(path: str | Path) -> WatchCapture:
     accel_rows = payload.get("accelerometer800Hz") or []
     motion_rows = payload.get("deviceMotion200Hz") or []
     if len(accel_rows) < 2 or len(motion_rows) < 2:
-        raise ValueError("Watch capture requires both 800 Hz accel and 200 Hz motion")
+        raise ValueError("Watch capture requires both accel and Device Motion streams")
 
     accel_t_abs = np.asarray([row["timestamp"] for row in accel_rows], dtype=np.float64)
     accel_g = np.asarray(
@@ -134,11 +157,11 @@ def load_watch_capture(path: str | Path) -> WatchCapture:
 
     # Native accelerometer is in g. Interpolate each axis to Device Motion time;
     # this is the only rate conversion and leaves accel_g_800 untouched.
-    accel_200 = np.column_stack(
+    accel_on_motion = np.column_stack(
         [np.interp(motion_t, accel_t, accel_g[:, axis]) for axis in range(3)]
     ) * G0
     fs = _median_fs(motion_t)
-    if not 120.0 <= fs <= 240.0:
+    if not _MOTION_FS_MIN <= fs <= _MOTION_FS_MAX:
         raise ValueError(f"unexpected Device Motion sample rate: {fs:.2f} Hz")
 
     handedness = Handedness(payload.get("handedness", "right"))
@@ -147,6 +170,9 @@ def load_watch_capture(path: str | Path) -> WatchCapture:
     if len(extrinsic) != 4:
         raise ValueError("mountExtrinsicWXYZ must have four values")
     device = payload.get("device") or {}
+    mode = payload.get("captureMode")
+    if mode not in {None, "high_rate", "compat"}:
+        raise ValueError(f"unsupported captureMode: {mode!r}")
     packet = ImuPacket(
         frame=SensorFrame(
             fs_hz=fs,
@@ -158,7 +184,7 @@ def load_watch_capture(path: str | Path) -> WatchCapture:
         ),
         t=motion_t,
         gyro=gyro,
-        accel=accel_200,
+        accel=accel_on_motion,
     )
     return WatchCapture(
         packet=packet,

@@ -132,18 +132,24 @@ struct TransferStatusView: View {
 
     private var subtitle: String {
         if analysis.isAnalyzing {
-            return "正在用完整 Python 管道处理 800/200 Hz 双流…"
+            return "正在用完整 Python 管道处理原始双流…"
         }
         if analysis.lastResult != nil {
             return "结果来自 analyze_swing，不是 Watch 端缩水版。"
         }
-        return "Watch 负责全速采集；iPhone 把原始数据交给完整算法。"
+        return "Watch 负责采集；iPhone 把原始数据交给完整算法。"
     }
 
     private var captureDetail: String {
         if let error = receiver.errorMessage { return error }
         if let sessionID = receiver.latestSessionID {
-            return "Session \(sessionID.prefix(8)) · 800 Hz ACC · 200 Hz Motion"
+            let accel = Int((receiver.latestAccelerometerHz ?? 0).rounded())
+            let motion = Int((receiver.latestDeviceMotionHz ?? 0).rounded())
+            let mode = receiver.latestCaptureMode == "compat" ? "兼容" : "高速"
+            if accel > 0 && motion > 0 {
+                return "Session \(sessionID.prefix(8)) · \(mode) · \(accel) Hz ACC · \(motion) Hz Motion"
+            }
+            return "Session \(sessionID.prefix(8)) · 双流已到达"
         }
         return "尚未收到 Watch transferFile。"
     }

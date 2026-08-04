@@ -7,6 +7,9 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
 
     @Published private(set) var latestCaptureURL: URL?
     @Published private(set) var latestSessionID: String?
+    @Published private(set) var latestCaptureMode: String?
+    @Published private(set) var latestAccelerometerHz: Double?
+    @Published private(set) var latestDeviceMotionHz: Double?
     @Published private(set) var errorMessage: String?
 
     private override init() {
@@ -39,9 +42,15 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
                 try FileManager.default.removeItem(at: destination)
             }
             try FileManager.default.moveItem(at: file.fileURL, to: destination)
+            let mode = file.metadata?["captureMode"] as? String
+            let accelHz = Self.doubleMetadata(file.metadata?["accelerometerHz"])
+            let motionHz = Self.doubleMetadata(file.metadata?["deviceMotionHz"])
             DispatchQueue.main.async {
                 self.latestSessionID = name
                 self.latestCaptureURL = destination
+                self.latestCaptureMode = mode
+                self.latestAccelerometerHz = accelHz
+                self.latestDeviceMotionHz = motionHz
                 self.errorMessage = nil
             }
         } catch {
@@ -49,6 +58,13 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
                 self.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private static func doubleMetadata(_ value: Any?) -> Double? {
+        if let number = value as? Double { return number }
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let text = value as? String { return Double(text) }
+        return nil
     }
 
     private func captureDirectory() throws -> URL {

@@ -9,15 +9,20 @@ from golfmate_algo.devices.watch_capture import G0, load_watch_capture
 from golfmate_algo.synth.analytic import planar_circular_swing
 
 
-def _write_capture(tmp_path):
-    swing = planar_circular_swing(fs_hz=200.0, impact_shock_g=4.0)
-    t200 = swing.packet.t
-    t800 = np.arange(int(round(t200[-1] * 800.0)) + 1) / 800.0
+def _write_capture(tmp_path, *, fs_motion=200.0, fs_accel=800.0, capture_mode="high_rate"):
+    swing = planar_circular_swing(fs_hz=fs_motion, impact_shock_g=4.0)
+    t_motion = swing.packet.t
+    t_accel = np.arange(int(round(t_motion[-1] * fs_accel)) + 1) / fs_accel
     accel_g = np.column_stack(
-        [np.interp(t800, t200, swing.packet.accel[:, axis] / G0) for axis in range(3)]
+        [
+            np.interp(t_accel, t_motion, swing.packet.accel[:, axis] / G0)
+            for axis in range(3)
+        ]
     )
-    impact_t = float(t200[swing.phases_true.impact_idx])
-    shock = 12.0 * np.exp(-0.5 * ((t800 - impact_t) / 0.0015) ** 2)
+    impact_t = float(t_motion[swing.phases_true.impact_idx])
+    # Narrower shock for high-rate; wider for ~100 Hz so it still lands in samples.
+    sigma = 0.0015 if fs_accel >= 400.0 else 0.008
+    shock = 12.0 * np.exp(-0.5 * ((t_accel - impact_t) / sigma) ** 2)
     accel_g[:, 2] += shock
 
     payload = {
@@ -28,11 +33,12 @@ def _write_capture(tmp_path):
         "handedness": "right",
         "wrist": "lead",
         "mountExtrinsicWXYZ": [1, 0, 0, 0],
+        "captureMode": capture_mode,
         "device": {
-            "model": "Watch7,5",
-            "systemVersion": "11.0",
-            "accelerometerHz": 800,
-            "deviceMotionHz": 200,
+            "model": "Watch7,5" if capture_mode == "high_rate" else "Watch5,2",
+            "systemVersion": "10.0",
+            "accelerometerHz": fs_accel,
+            "deviceMotionHz": fs_motion,
         },
         "accelerometer800Hz": [
             {
@@ -41,7 +47,7 @@ def _write_capture(tmp_path):
                 "y": float(a[1]),
                 "z": float(a[2]),
             }
-            for t, a in zip(t800, accel_g)
+            for t, a in zip(t_accel, accel_g)
         ],
         "deviceMotion200Hz": [
             {
@@ -55,10 +61,10 @@ def _write_capture(tmp_path):
                 "userAcceleration": {"x": 0.0, "y": 0.0, "z": 0.0},
                 "attitudeWXYZ": {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
             }
-            for t, g in zip(t200, swing.packet.gyro)
+            for t, g in zip(t_motion, swing.packet.gyro)
         ],
     }
-    path = tmp_path / "watch.json"
+    path = tmp_path / f"watch_{capture_mode}.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path, swing, impact_t
 
@@ -66,6 +72,7 @@ def _write_capture(tmp_path):
 def test_watch_capture_preserves_dual_rates_and_units(tmp_path):
     path, swing, _ = _write_capture(tmp_path)
     capture = load_watch_capture(path)
+    assert capture.capture_mode == "high_rate"
     assert capture.accel_t_800.size > capture.packet.t.size * 3.9
     assert capture.packet.frame.fs_hz == pytest.approx(200.0, rel=1e-6)
     assert capture.packet.frame.device_id == "apple_watch/Watch7,5"
@@ -89,6 +96,23 @@ def test_native_800hz_impact_hint_drives_full_pipeline(tmp_path):
     assert abs(detected_t - impact_t) <= 0.0051
     assert report.meta["impact_mode"] == "collision"
     assert report.meta["impact_method"] == "high_rate_impact_hint"
+
+
+def test_series5_compat_100hz_runs_full_pipeline_without_high_rate_hint(tmp_path):
+    path, _, impact_t = _write_capture(
+        tmp_path, fs_motion=100.0, fs_accel=100.0, capture_mode="compat"
+    )
+    capture = load_watch_capture(path)
+    assert capture.capture_mode == "compat"
+    assert capture.packet.frame.fs_hz == pytest.approx(100.0, rel=1e-6)
+    assert capture.packet.frame.device_id == "apple_watch/Watch5,2"
+    assert capture.high_rate_impact_time_s() is None
+
+    report = capture.analyze(compare_to_ideal=False)
+    detected_t = float(capture.packet.t[report.phases.impact_idx])
+    # Compat trades sub-frame impact precision for hardware reach.
+    assert abs(detected_t - impact_t) <= 0.04
+    assert report.meta.get("impact_method") != "high_rate_impact_hint"
 
 
 def test_watch_capture_rejects_incomplete_streams(tmp_path):

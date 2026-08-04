@@ -17,16 +17,24 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     }
 
     @Published private(set) var state: CaptureState = .idle
+    @Published private(set) var captureMode: CaptureMode = .highRate
     @Published private(set) var accelerometerSamples = 0
     @Published private(set) var deviceMotionSamples = 0
     @Published private(set) var lastCaptureURL: URL?
     @Published private(set) var startedAt: Date?
-
-    let targetAccelerometerHz = 800
-    let targetDeviceMotionHz = 200
+    /// Target / requested rates shown in the UI before a capture finishes.
+    @Published private(set) var displayAccelerometerHz = 800
+    @Published private(set) var displayDeviceMotionHz = 200
 
     private let healthStore = HKHealthStore()
-    private let sensorManager = CMBatchedSensorManager()
+    private let batchedSensors = CMBatchedSensorManager()
+    private let motionManager = CMMotionManager()
+    private let motionQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.jing.golfai.compat-motion"
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
     private let buffer = SensorRingBuffer()
     private var workoutSession: HKWorkoutSession?
     private var workoutBuilder: HKLiveWorkoutBuilder?
@@ -34,16 +42,43 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     private var deviceMotionTask: Task<Void, Never>?
     private var sessionID = UUID()
 
+    /// Series 8 / Ultra+ high-rate path.
     var highRateSupported: Bool {
         CMBatchedSensorManager.isAccelerometerSupported
             && CMBatchedSensorManager.isDeviceMotionSupported
     }
 
+    /// Series 5 and other watches that only expose CMMotionManager.
+    var compatSupported: Bool {
+        motionManager.isAccelerometerAvailable && motionManager.isDeviceMotionAvailable
+    }
+
+    var canCapture: Bool { highRateSupported || compatSupported }
+
     var isRecording: Bool { state == .recording }
+
+    var isCompatMode: Bool { captureMode == .compat }
+
+    func refreshCapability() {
+        if highRateSupported {
+            captureMode = .highRate
+            displayAccelerometerHz = 800
+            displayDeviceMotionHz = 200
+        } else if compatSupported {
+            captureMode = .compat
+            displayAccelerometerHz = 100
+            displayDeviceMotionHz = 100
+        } else {
+            captureMode = .compat
+            displayAccelerometerHz = 0
+            displayDeviceMotionHz = 0
+        }
+    }
 
     func start() {
         guard state == .idle || state == .ready else { return }
-        guard highRateSupported else {
+        refreshCapability()
+        guard canCapture else {
             state = .unsupported
             return
         }
@@ -69,10 +104,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     func stop() {
         guard state == .recording else { return }
         state = .processing
-        accelerometerTask?.cancel()
-        deviceMotionTask?.cancel()
-        sensorManager.stopAccelerometerUpdates()
-        sensorManager.stopDeviceMotionUpdates()
+        stopSensorStreams()
 
         let endDate = Date()
         workoutSession?.end()
@@ -87,6 +119,8 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             do {
                 let payload = makePayload(snapshot: snapshot, endedAt: endDate)
                 lastCaptureURL = try WatchTransferService.shared.enqueue(payload)
+                displayAccelerometerHz = Int(payload.device.accelerometerHz.rounded())
+                displayDeviceMotionHz = Int(payload.device.deviceMotionHz.rounded())
                 state = .ready
                 WKInterfaceDevice.current().play(.success)
             } catch {
@@ -100,6 +134,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         guard !isRecording else { return }
         state = .idle
         startedAt = nil
+        refreshCapability()
     }
 
     private func beginWorkout() throws {
@@ -136,10 +171,24 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     }
 
     private func startSensorStreams() {
+        if highRateSupported {
+            captureMode = .highRate
+            displayAccelerometerHz = 800
+            displayDeviceMotionHz = 200
+            startHighRateStreams()
+        } else {
+            captureMode = .compat
+            displayAccelerometerHz = 100
+            displayDeviceMotionHz = 100
+            startCompatStreams()
+        }
+    }
+
+    private func startHighRateStreams() {
         accelerometerTask = Task { [weak self] in
             guard let self else { return }
             do {
-                for try await batch in sensorManager.accelerometerUpdates() {
+                for try await batch in batchedSensors.accelerometerUpdates() {
                     if Task.isCancelled { break }
                     let samples = batch.map {
                         Vector3Sample(
@@ -163,35 +212,9 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         deviceMotionTask = Task { [weak self] in
             guard let self else { return }
             do {
-                for try await batch in sensorManager.deviceMotionUpdates() {
+                for try await batch in batchedSensors.deviceMotionUpdates() {
                     if Task.isCancelled { break }
-                    let samples = batch.map {
-                        let q = $0.attitude.quaternion
-                        return DeviceMotionSample(
-                            timestamp: $0.timestamp,
-                            rotationRate: Vector3(
-                                x: $0.rotationRate.x,
-                                y: $0.rotationRate.y,
-                                z: $0.rotationRate.z
-                            ),
-                            gravity: Vector3(
-                                x: $0.gravity.x,
-                                y: $0.gravity.y,
-                                z: $0.gravity.z
-                            ),
-                            userAcceleration: Vector3(
-                                x: $0.userAcceleration.x,
-                                y: $0.userAcceleration.y,
-                                z: $0.userAcceleration.z
-                            ),
-                            attitudeWXYZ: QuaternionWXYZ(
-                                w: q.w,
-                                x: q.x,
-                                y: q.y,
-                                z: q.z
-                            )
-                        )
-                    }
+                    let samples = batch.map { self.deviceMotionSample(from: $0) }
                     try await buffer.appendDeviceMotion(samples)
                     let counts = await buffer.counts()
                     deviceMotionSamples = counts.deviceMotion
@@ -204,11 +227,73 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         }
     }
 
-    private func failCapture(_ error: Error) {
+    private func startCompatStreams() {
+        // Series 5 / legacy path: request 100 Hz. Actual delivered rate is
+        // measured from timestamps and written into the capture payload.
+        let interval = 1.0 / 100.0
+        motionManager.accelerometerUpdateInterval = interval
+        motionManager.deviceMotionUpdateInterval = interval
+
+        motionManager.startAccelerometerUpdates(to: motionQueue) { [weak self] data, error in
+            guard let self else { return }
+            if let error {
+                Task { @MainActor in self.failCapture(error) }
+                return
+            }
+            guard let data else { return }
+            let sample = Vector3Sample(
+                timestamp: data.timestamp,
+                x: data.acceleration.x,
+                y: data.acceleration.y,
+                z: data.acceleration.z
+            )
+            Task { @MainActor in
+                do {
+                    try await self.buffer.appendAccelerometer([sample])
+                    let counts = await self.buffer.counts()
+                    self.accelerometerSamples = counts.accelerometer
+                } catch {
+                    self.failCapture(error)
+                }
+            }
+        }
+
+        motionManager.startDeviceMotionUpdates(
+            using: .xArbitraryZVertical,
+            to: motionQueue
+        ) { [weak self] data, error in
+            guard let self else { return }
+            if let error {
+                Task { @MainActor in self.failCapture(error) }
+                return
+            }
+            guard let data else { return }
+            let sample = self.deviceMotionSample(from: data)
+            Task { @MainActor in
+                do {
+                    try await self.buffer.appendDeviceMotion([sample])
+                    let counts = await self.buffer.counts()
+                    self.deviceMotionSamples = counts.deviceMotion
+                } catch {
+                    self.failCapture(error)
+                }
+            }
+        }
+    }
+
+    private func stopSensorStreams() {
         accelerometerTask?.cancel()
         deviceMotionTask?.cancel()
-        sensorManager.stopAccelerometerUpdates()
-        sensorManager.stopDeviceMotionUpdates()
+        accelerometerTask = nil
+        deviceMotionTask = nil
+        batchedSensors.stopAccelerometerUpdates()
+        batchedSensors.stopDeviceMotionUpdates()
+        motionManager.stopAccelerometerUpdates()
+        motionManager.stopDeviceMotionUpdates()
+    }
+
+    private func failCapture(_ error: Error) {
+        stopSensorStreams()
         workoutSession?.end()
         state = .failed(error.localizedDescription)
         WKInterfaceDevice.current().play(.failure)
@@ -219,6 +304,14 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         endedAt: Date
     ) -> WatchCapturePayload {
         let watch = WKInterfaceDevice.current()
+        let accelHz = Self.measuredRate(
+            timestamps: snapshot.accelerometer.map(\.timestamp),
+            fallback: Double(displayAccelerometerHz)
+        )
+        let motionHz = Self.measuredRate(
+            timestamps: snapshot.deviceMotion.map(\.timestamp),
+            fallback: Double(displayDeviceMotionHz)
+        )
         return WatchCapturePayload(
             schemaVersion: GolfMateCaptureContract.schemaVersion,
             sessionID: sessionID,
@@ -227,15 +320,54 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             handedness: "right",
             wrist: "lead",
             mountExtrinsicWXYZ: [1, 0, 0, 0],
+            captureMode: captureMode,
             device: CaptureDevice(
                 model: watch.model,
                 systemVersion: watch.systemVersion,
-                accelerometerHz: Double(targetAccelerometerHz),
-                deviceMotionHz: Double(targetDeviceMotionHz)
+                accelerometerHz: accelHz,
+                deviceMotionHz: motionHz
             ),
             accelerometer800Hz: snapshot.accelerometer,
             deviceMotion200Hz: snapshot.deviceMotion
         )
+    }
+
+    private func deviceMotionSample(from motion: CMDeviceMotion) -> DeviceMotionSample {
+        let q = motion.attitude.quaternion
+        return DeviceMotionSample(
+            timestamp: motion.timestamp,
+            rotationRate: Vector3(
+                x: motion.rotationRate.x,
+                y: motion.rotationRate.y,
+                z: motion.rotationRate.z
+            ),
+            gravity: Vector3(
+                x: motion.gravity.x,
+                y: motion.gravity.y,
+                z: motion.gravity.z
+            ),
+            userAcceleration: Vector3(
+                x: motion.userAcceleration.x,
+                y: motion.userAcceleration.y,
+                z: motion.userAcceleration.z
+            ),
+            attitudeWXYZ: QuaternionWXYZ(
+                w: q.w,
+                x: q.x,
+                y: q.y,
+                z: q.z
+            )
+        )
+    }
+
+    private static func measuredRate(
+        timestamps: [TimeInterval],
+        fallback: Double
+    ) -> Double {
+        guard timestamps.count >= 3 else { return fallback }
+        let span = timestamps.last! - timestamps.first!
+        guard span > 1e-3 else { return fallback }
+        return Double(timestamps.count - 1) / span
     }
 
     private func authorizeHealthKit() async throws {

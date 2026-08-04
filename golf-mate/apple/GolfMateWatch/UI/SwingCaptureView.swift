@@ -20,6 +20,7 @@ struct SwingCaptureView: View {
         }
         .containerBackground(for: .navigation) { background }
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear { capture.refreshCapability() }
     }
 
     private var background: some View {
@@ -46,8 +47,16 @@ struct SwingCaptureView: View {
 
     private var rateHeader: some View {
         HStack(spacing: 6) {
-            ratePill(value: "800", label: "ACC")
-            ratePill(value: "200", label: "MOTION")
+            ratePill(value: "\(capture.displayAccelerometerHz)", label: "ACC")
+            ratePill(value: "\(capture.displayDeviceMotionHz)", label: "MOTION")
+            if capture.isCompatMode {
+                Text("兼容")
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.22), in: Capsule())
+                    .foregroundStyle(.orange)
+            }
             Spacer(minLength: 2)
             Circle()
                 .fill(capture.isRecording ? Color.mint : Color.white.opacity(0.32))
@@ -121,7 +130,7 @@ struct SwingCaptureView: View {
                 capture.reset()
             }
         case .unsupported:
-            Label("需要 Series 8 或更新", systemImage: "applewatch.slash")
+            Label("此设备无法采集运动", systemImage: "applewatch.slash")
                 .font(.caption2)
                 .foregroundStyle(.orange)
                 .padding(.bottom, 5)
@@ -155,13 +164,13 @@ struct SwingCaptureView: View {
 
     private var statusEyebrow: String {
         switch capture.state {
-        case .recording: "LIVE IMU"
+        case .recording: capture.isCompatMode ? "COMPAT IMU" : "LIVE IMU"
         case .ready: "CAPTURE LOCKED"
         case .processing: "VERIFYING"
         case .preparing: "ARMING SENSORS"
         case .failed: "CAPTURE ERROR"
         case .unsupported: "HARDWARE"
-        case .idle: "SWING LAB"
+        case .idle: capture.isCompatMode ? "COMPAT LAB" : "SWING LAB"
         }
     }
 
@@ -179,11 +188,14 @@ struct SwingCaptureView: View {
 
     private var statusDetail: String {
         switch capture.state {
-        case .idle: "抬腕开始 · 全速双流"
+        case .idle:
+            capture.isCompatMode
+                ? "抬腕开始 · Series 5 兼容约 100 Hz"
+                : "抬腕开始 · 800/200 全速双流"
         case .ready:
             "\(capture.accelerometerSamples) ACC · \(capture.deviceMotionSamples) MOTION"
         case let .failed(message): message
-        case .unsupported: "800 Hz 高速采集不可用"
+        case .unsupported: "Core Motion 不可用"
         default: ""
         }
     }

@@ -33,6 +33,9 @@ final class WatchTransferService: NSObject, WCSessionDelegate {
             metadata: [
                 "schemaVersion": payload.schemaVersion,
                 "sessionID": payload.sessionID.uuidString,
+                "captureMode": payload.captureMode.rawValue,
+                "accelerometerHz": payload.device.accelerometerHz,
+                "deviceMotionHz": payload.device.deviceMotionHz,
             ]
         )
         return url

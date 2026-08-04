@@ -12,11 +12,11 @@ Bundle IDs (unique; `GolfMate` is taken on App Store Connect):
 ## Architecture
 
 ```text
-Apple Watch Series 8+
+Apple Watch
   HKWorkoutSession
-  ├─ CMBatchedSensorManager accelerometerUpdates  → 800 Hz raw (g)
-  └─ CMBatchedSensorManager deviceMotionUpdates   → 200 Hz gyro (rad/s)
-        ↓ lossless golfmate-watch-capture-v1 JSON
+  ├─ high_rate (Series 8 / Ultra+): CMBatchedSensorManager → ~800 Hz ACC + ~200 Hz Motion
+  └─ compat    (Series 5+):         CMMotionManager         → ~100 Hz ACC + ~100 Hz Motion
+        ↓ lossless golfmate-watch-capture-v1 JSON (+ captureMode)
   WCSession.transferFile
         ↓
 iPhone Documents/GolfMateCaptures
@@ -25,8 +25,9 @@ python scripts/analyze_watch_capture.py capture.json
         ↓ full Golf Mate pipeline
 ```
 
-The 800 Hz stream is never discarded. Python aligns it onto the 200 Hz AHRS grid and also
-uses the original stream for a sub-frame impact timestamp.
+Dense accel (≥400 Hz) is never discarded and can drive a sub-frame impact hint.
+Compat captures still run the full pipeline; Impact timing falls back to the
+segmental detector (no fake 800 Hz claim).
 
 ## Generate the Xcode project
 
@@ -82,8 +83,12 @@ Confirm both targets:
 | Watch → WKCompanionAppBundleIdentifier | `com.jing.golfai.GolfAiJing` |
 
 Set your Development Team for both targets, keep HealthKit enabled, and run on a
-physical Series 8 / Ultra or newer Watch. `CMBatchedSensorManager` does not
-provide high-rate data in the Watch simulator.
+physical Apple Watch. Series 8 / Ultra+ uses the 800/200 high-rate path; Series 5
+(and other watches with Core Motion only) automatically use ~100 Hz compat mode.
+`CMBatchedSensorManager` does not provide high-rate data in the Watch simulator.
+
+**OS note:** app targets watchOS 10. Series 5’s last supported OS is watchOS 10,
+so install from an Xcode/watchOS 10 toolchain or keep the Watch on watchOS 10.
 
 In App Store Connect, create the app as **Golf-ai-Jing** (not GolfMate).
 
