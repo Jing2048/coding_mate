@@ -1,0 +1,26 @@
+{
+  "contract_version": "edge-trajectory-v1",
+  "input_fs_hz": 100.0,
+  "input_channels": [
+    "gyro_x",
+    "gyro_y",
+    "gyro_z",
+    "accel_x",
+    "accel_y",
+    "accel_z"
+  ],
+  "output_dim": 198,
+  "trajectory_points": 64,
+  "numpy_artifact": "/workspace/golf-mate/algo/golfmate_algo/export/artifacts/edge_trajectory_student_v1.npz",
+  "numpy_artifact_present": true,
+  "train_seed": 0,
+  "n_train": 24,
+  "schema_contract_version": "edge-trajectory-v1",
+  "coreml": {
+    "ok": false,
+    "skipped": true,
+    "reason": "numpy-only flag set",
+    "mlmodel_path": null
+  },
+  "coreml_model_present": false
+}

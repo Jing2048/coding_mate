@@ -29,6 +29,15 @@ dev = [
 where = ["."]
 include = ["golfmate_algo*"]
 
+[tool.setuptools.package-data]
+golfmate_algo = [
+  "export/*.json",
+  "export/artifacts/*",
+  "devices/*.md",
+  "reference/*.json",
+  "model/*.json",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

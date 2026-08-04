@@ -1,4 +1,4 @@
-"""Apple Watch ``golfmate-watch-capture-v1`` adapter.
+"""Apple Watch ``golfmate-watch-capture-v1`` / packed-v2 adapter.
 
 Supports two hardware paths written by the Watch app:
 
@@ -9,6 +9,11 @@ Field names ``accelerometer800Hz`` / ``deviceMotion200Hz`` are schema v1 labels;
 actual rates live in ``device.accelerometerHz`` / ``device.deviceMotionHz``.
 High-rate captures keep the dense accel sidecar for sub-frame impact hints.
 Compat captures still run the full ``analyze_swing`` pipeline without that hint.
+
+Ingress formats
+---------------
+* JSON v1 (``schemaVersion == golfmate-watch-capture-v1``)
+* Packed binary v2 (magic ``GMPC``, see ``packed_capture_v2``)
 """
 
 from __future__ import annotations
@@ -16,10 +21,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
+from golfmate_algo.devices.packed_capture_v2 import (
+    decode_packed_capture_v2,
+    is_packed_capture_v2,
+)
 from golfmate_algo.events.segmental import _impact_transient, detect_phases_segmental
 from golfmate_algo.pipeline import analyze_swing
 from golfmate_algo.types import (
@@ -117,7 +126,24 @@ class WatchCapture:
 
 
 def load_watch_capture(path: str | Path) -> WatchCapture:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    """Load JSON v1 or packed binary v2 into a ``WatchCapture``."""
+    path = Path(path)
+    raw = path.read_bytes()
+    if is_packed_capture_v2(raw):
+        packed = decode_packed_capture_v2(raw)
+        return watch_capture_from_v1_dict(packed.to_v1_dict())
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            "unsupported Watch capture: not packed v2 and not UTF-8 JSON"
+        ) from exc
+    payload = json.loads(text)
+    return watch_capture_from_v1_dict(payload)
+
+
+def watch_capture_from_v1_dict(payload: Mapping[str, Any]) -> WatchCapture:
+    """Adapt a v1-compatible dict (also produced by packed-v2 decode)."""
     if payload.get("schemaVersion") != SCHEMA_VERSION:
         raise ValueError(
             f"unsupported Watch schema: {payload.get('schemaVersion')!r}"
@@ -190,7 +216,7 @@ def load_watch_capture(path: str | Path) -> WatchCapture:
         packet=packet,
         accel_t_800=accel_t,
         accel_g_800=accel_g,
-        metadata=payload,
+        metadata=dict(payload),
     )
 
 

@@ -1,0 +1,59 @@
+{
+  "contract_version": "edge-trajectory-v1",
+  "description": "On-device Apple Watch edge trajectory contract. Fixed 100 Hz IMU input; outputs phases, 64-point XYZ trajectory, confidence, and transition_rush. NumPy teacher/student baseline ships on Linux; Core ML conversion is Mac-only via export script.",
+  "input": {
+    "fs_hz": 100.0,
+    "channels": ["gyro_x", "gyro_y", "gyro_z", "accel_x", "accel_y", "accel_z"],
+    "units": {
+      "gyro": "rad/s",
+      "accel": "m/s^2"
+    },
+    "max_samples": 512,
+    "layout": "time-major (T, 6), zero-padded/truncated to max_samples for the student feature path"
+  },
+  "output": {
+    "phases_norm": {
+      "names": ["address", "top", "impact", "finish"],
+      "dtype": "float32",
+      "range": [0.0, 1.0],
+      "note": "Index / (T-1) on the 100 Hz grid"
+    },
+    "trajectory_xyz": {
+      "points": 64,
+      "dtype": "float32",
+      "units": "meters",
+      "frame": "address-relative wrist path, uniformly sampled address→finish"
+    },
+    "confidence": {
+      "dtype": "float32",
+      "range": [0.0, 1.0]
+    },
+    "transition_rush": {
+      "dtype": "float32",
+      "range": [0.0, 1.0],
+      "note": "Early-release / casting rush proxy (1 = more rushed transition)"
+    },
+    "vector_layout": [
+      "phases_norm[4]",
+      "trajectory_xyz[64*3]",
+      "confidence[1]",
+      "transition_rush[1]"
+    ],
+    "output_dim": 198
+  },
+  "artifact": {
+    "format": "npz",
+    "keys": [
+      "contract_version",
+      "feature_names",
+      "feat_mean",
+      "feat_std",
+      "W",
+      "b",
+      "train_seed",
+      "n_train"
+    ],
+    "coreml": "Optional; produced only when coremltools is available (macOS). Absence of a .mlmodel does not imply export failure of the NumPy artifact."
+  },
+  "future_path": "Train/distill offline in Python → scripts/export_edge_trajectory_coreml.py → Core ML on Mac → Watch student inference for preview; iPhone/Mac Python remains final authority."
+}
