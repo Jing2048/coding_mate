@@ -17,6 +17,7 @@ from golfmate_algo.export.edge_trajectory_contract import (
 from golfmate_algo.export.edge_trajectory_model import (
     extract_edge_features,
     fit_edge_student,
+    load_edge_student,
     resample_to_edge_input,
     teacher_edge_output,
     train_default_edge_student,
@@ -74,13 +75,58 @@ def test_student_deterministic_and_predicts():
 def test_student_artifact_roundtrip(tmp_path):
     student = train_default_edge_student(n_train=6, seed=1)
     path = student.save(tmp_path / "student.npz")
-    from golfmate_algo.export.edge_trajectory_model import load_edge_student
 
     loaded = load_edge_student(path)
     swing = planar_circular_swing(fs_hz=INPUT_FS_HZ)
     assert np.allclose(
         student.predict_vector(swing.packet), loaded.predict_vector(swing.packet)
     )
+
+
+def test_shipped_student_passes_independent_synthetic_trajectory_gate():
+    """The bundled model must generalize beyond its deterministic train seed."""
+    student = load_edge_student()
+    rng = np.random.default_rng(991)
+    trajectory_rmse_m: list[float] = []
+    phase_mae_s: list[float] = []
+    for i in range(24):
+        casting = bool(i % 3 == 0)
+        swing = planar_circular_swing(
+            fs_hz=INPUT_FS_HZ,
+            casting=casting,
+            casting_lead_s=float(rng.uniform(0.04, 0.15)) if casting else 0.0,
+            radius_m=float(rng.uniform(0.38, 0.75)),
+            backswing_s=float(rng.uniform(0.60, 0.95)),
+            downswing_s=float(rng.uniform(0.18, 0.35)),
+            top_angle_deg=float(rng.uniform(90.0, 130.0)),
+            plane_tilt_deg=float(rng.uniform(40.0, 70.0)),
+            impact_shock_g=float(rng.uniform(1.5, 10.0)),
+        )
+        prediction = student.predict(swing.packet)
+        teacher = teacher_edge_output(swing.packet)
+        trajectory_rmse_m.append(
+            float(
+                np.sqrt(
+                    np.mean(
+                        np.sum(
+                            (prediction.trajectory_xyz - teacher.trajectory_xyz) ** 2,
+                            axis=1,
+                        )
+                    )
+                )
+            )
+        )
+        duration = float(swing.packet.t[-1] - swing.packet.t[0])
+        phase_mae_s.append(
+            float(np.mean(np.abs(prediction.phases_norm - teacher.phases_norm)))
+            * duration
+        )
+
+    # Teacher-distillation gate. Real optical Watch data remains a separate
+    # release gate; this prevents a visibly broken model from entering bundle.
+    assert np.mean(trajectory_rmse_m) <= 0.10
+    assert np.quantile(trajectory_rmse_m, 0.95) <= 0.17
+    assert np.quantile(phase_mae_s, 0.95) <= 0.04
 
 
 def test_casting_increases_teacher_transition_rush():

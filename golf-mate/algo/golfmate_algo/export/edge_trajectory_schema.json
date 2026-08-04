@@ -48,9 +48,12 @@
       "feature_names",
       "feat_mean",
       "feat_std",
+      "projection",
+      "hidden_bias",
       "W",
       "b",
       "train_seed",
+      "projection_seed",
       "n_train"
     ],
     "coreml": "edge_trajectory_v1.mlpackage; specification version 7, input features[1,29], output edge_outputs[1,198]."

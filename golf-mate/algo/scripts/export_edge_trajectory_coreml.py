@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -53,11 +54,13 @@ def _try_coreml_export(npz_path: Path, mlmodel_path: Path) -> dict:
         }
 
     student = load_edge_student(npz_path)
-    feat_dim = int(student.W.shape[1])
+    feat_dim = len(student.feature_names)
     W = student.W.astype("float32")
     b = student.b.astype("float32")
     mean = student.feat_mean.astype("float32")
     std = student.feat_std.astype("float32")
+    projection = student.projection.astype("float32")
+    hidden_bias = student.hidden_bias.astype("float32")
 
     try:
         # Minimal MIL program: y = W @ ((x - mean) / std) + b.
@@ -70,7 +73,15 @@ def _try_coreml_export(npz_path: Path, mlmodel_path: Path) -> dict:
         def edge_prog(features):  # noqa: ANN001
             x = mb.sub(x=features, y=mean.reshape(1, -1), name="centered")
             x = mb.real_div(x=x, y=std.reshape(1, -1), name="normalized")
-            y = mb.matmul(x=x, y=W.T, name="linear")
+            hidden = mb.matmul(x=x, y=projection, name="hidden_projection")
+            hidden = mb.add(
+                x=hidden,
+                y=hidden_bias.reshape(1, -1),
+                name="hidden_pre_activation",
+            )
+            hidden = mb.tanh(x=hidden, name="hidden")
+            phi = mb.concat(values=[hidden, x], axis=1, name="student_features")
+            y = mb.matmul(x=phi, y=W.T, name="linear")
             y = mb.add(x=y, y=b.reshape(1, -1), name="edge_outputs")
             return y
 
@@ -87,6 +98,8 @@ def _try_coreml_export(npz_path: Path, mlmodel_path: Path) -> dict:
             f"{CONTRACT_VERSION} student (feature→phases/traj/conf/rush)"
         )
         mlmodel_path.parent.mkdir(parents=True, exist_ok=True)
+        if mlmodel_path.exists():
+            shutil.rmtree(mlmodel_path)
         mlmodel.save(str(mlmodel_path))
         return {
             "ok": True,
@@ -114,7 +127,7 @@ def main() -> int:
         / "artifacts",
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--n-train", type=int, default=24)
+    parser.add_argument("--n-train", type=int, default=512)
     parser.add_argument(
         "--numpy-only",
         action="store_true",
@@ -161,6 +174,7 @@ def main() -> int:
         "numpy_artifact": npz_path.name,
         "numpy_artifact_present": npz_path.is_file(),
         "train_seed": student.train_seed,
+        "projection_seed": student.projection_seed,
         "n_train": student.n_train,
         "schema_contract_version": schema.get("contract_version"),
         "coreml": coreml_status,

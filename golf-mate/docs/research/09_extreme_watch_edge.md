@@ -61,10 +61,15 @@ gyro + accel，输出：
 - confidence；
 - transition-rush。
 
-当前 Core ML student 是确定性 ridge 蒸馏基线，模型很小，已生成
+当前 Core ML student 是确定性 128 维 tanh random-feature + ridge 输出的非线性
+蒸馏模型，模型很小，已生成
 `edge_trajectory_v1.mlpackage`。Watch 将 student 作为有界修正（最大 30% blend），
 因果姿态几何仍提供稳定底座；未完成 optical-aligned 真机门之前，UI 必须显示
 `PROVISIONAL`，完整 Python 结果始终覆盖端上预览。
+
+固定独立 synthetic seed 的 shipped-artifact 门为：领先腕轨迹 teacher RMSE
+mean ≤10 cm / P95 ≤17 cm，相位平均绝对时间误差 P95 ≤40 ms。该门只证明蒸馏
+没有明显失真，不能替代真实 Watch + optical release gate。
 
 触觉仅针对单腕可观测的高置信 transition rush，练习采集中每杆最多一次；不宣称
 单 Watch 能直接测出 HackMotion 双节点级腕屈伸。

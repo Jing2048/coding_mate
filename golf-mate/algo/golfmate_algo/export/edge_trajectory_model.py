@@ -4,9 +4,9 @@ Teacher
   Resample IMU to 100 Hz → full ``analyze_swing`` → contract outputs.
 
 Student
-  Compact ridge-linear map from fixed window summary features → contract
-  vector. Fit with a fixed RNG seed on synthetic swings so Linux CI stays
-  deterministic without Core ML / PyTorch.
+  Compact random-feature nonlinear distillation model from fixed-window
+  summary features → contract vector. A deterministic tanh projection plus
+  ridge output keeps the model Core ML-friendly without PyTorch.
 
 Artifacts are ``.npz`` weight dumps + the JSON schema. Core ML conversion is
 intentionally deferred to ``scripts/export_edge_trajectory_coreml.py`` on macOS.
@@ -76,21 +76,26 @@ _DEFAULT_ARTIFACT = Path(__file__).with_name("artifacts") / DEFAULT_ARTIFACT_NAM
 
 @dataclass(frozen=True)
 class EdgeTrajectoryStudent:
-    """Compact linear student: ``y = W @ ((f - mean) / std) + b``."""
+    """Compact nonlinear student: tanh random features + ridge output."""
 
     version: str
     feature_names: tuple[str, ...]
     feat_mean: NDArray[np.float64]
     feat_std: NDArray[np.float64]
-    W: NDArray[np.float64]  # (OUTPUT_DIM, F)
+    projection: NDArray[np.float64]  # (F, H)
+    hidden_bias: NDArray[np.float64]  # (H,)
+    W: NDArray[np.float64]  # (OUTPUT_DIM, H + F)
     b: NDArray[np.float64]  # (OUTPUT_DIM,)
     train_seed: int
+    projection_seed: int
     n_train: int
 
     def predict_vector(self, packet: ImuPacket) -> NDArray[np.float64]:
         feat = extract_edge_features(packet)
         x = (feat - self.feat_mean) / self.feat_std
-        y = self.W @ x + self.b
+        hidden = np.tanh(x @ self.projection + self.hidden_bias)
+        phi = np.concatenate([hidden, x])
+        y = self.W @ phi + self.b
         y = y.copy()
         y[:4] = np.clip(y[:4], 0.0, 1.0)
         # Enforce monotonic phases softly.
@@ -115,9 +120,12 @@ class EdgeTrajectoryStudent:
             feature_names=np.asarray(self.feature_names),
             feat_mean=np.asarray(self.feat_mean, dtype=np.float64),
             feat_std=np.asarray(self.feat_std, dtype=np.float64),
+            projection=np.asarray(self.projection, dtype=np.float64),
+            hidden_bias=np.asarray(self.hidden_bias, dtype=np.float64),
             W=np.asarray(self.W, dtype=np.float64),
             b=np.asarray(self.b, dtype=np.float64),
             train_seed=np.asarray(self.train_seed, dtype=np.int64),
+            projection_seed=np.asarray(self.projection_seed, dtype=np.int64),
             n_train=np.asarray(self.n_train, dtype=np.int64),
             input_fs_hz=np.asarray(INPUT_FS_HZ, dtype=np.float64),
             output_dim=np.asarray(OUTPUT_DIM, dtype=np.int64),
@@ -143,9 +151,12 @@ def load_edge_student(path: str | Path | None = None) -> EdgeTrajectoryStudent:
         feature_names=names,
         feat_mean=np.asarray(data["feat_mean"], dtype=np.float64),
         feat_std=np.asarray(data["feat_std"], dtype=np.float64),
+        projection=np.asarray(data["projection"], dtype=np.float64),
+        hidden_bias=np.asarray(data["hidden_bias"], dtype=np.float64),
         W=np.asarray(data["W"], dtype=np.float64),
         b=np.asarray(data["b"], dtype=np.float64),
         train_seed=int(data["train_seed"]),
+        projection_seed=int(data["projection_seed"]),
         n_train=int(data["n_train"]),
     )
 
@@ -285,7 +296,9 @@ def fit_edge_student(
     packets: list[ImuPacket],
     *,
     seed: int = 0,
-    ridge: float = 1e-2,
+    ridge: float = 0.5,
+    hidden_dim: int = 128,
+    projection_seed: int = 1,
     impact_hints: list[float | None] | None = None,
 ) -> EdgeTrajectoryStudent:
     """Distill teacher labels into a ridge-linear student (deterministic)."""
@@ -307,25 +320,35 @@ def fit_edge_student(
     feat_std = X.std(axis=0)
     feat_std = np.where(feat_std < 1e-8, 1.0, feat_std)
     Xn = (X - feat_mean) / feat_std
-    # Ridge: W = Y.T @ Xn @ inv(Xn.T@Xn + λI), then b = mean residual.
-    xtx = Xn.T @ Xn + ridge * np.eye(Xn.shape[1])
-    W = np.linalg.solve(xtx, Xn.T @ Y).T  # (out, feat)
-    b = Y.mean(axis=0) - W @ Xn.mean(axis=0)
+    feature_rng = np.random.default_rng(projection_seed)
+    projection = feature_rng.normal(
+        0.0, 1.0 / np.sqrt(Xn.shape[1]), size=(Xn.shape[1], hidden_dim)
+    )
+    hidden_bias = feature_rng.uniform(-0.5, 0.5, size=hidden_dim)
+    hidden = np.tanh(Xn @ projection + hidden_bias)
+    phi = np.concatenate([hidden, Xn], axis=1)
+    # Ridge output over nonlinear and identity features.
+    xtx = phi.T @ phi + ridge * np.eye(phi.shape[1])
+    W = np.linalg.solve(xtx, phi.T @ Y).T
+    b = Y.mean(axis=0) - W @ phi.mean(axis=0)
     return EdgeTrajectoryStudent(
         version=CONTRACT_VERSION,
         feature_names=FEATURE_NAMES,
         feat_mean=feat_mean,
         feat_std=feat_std,
+        projection=projection,
+        hidden_bias=hidden_bias,
         W=W,
         b=b,
         train_seed=int(seed),
+        projection_seed=int(projection_seed),
         n_train=len(packets),
     )
 
 
 def train_default_edge_student(
     *,
-    n_train: int = 24,
+    n_train: int = 512,
     seed: int = 0,
 ) -> EdgeTrajectoryStudent:
     """Fit on analytic synthetic swings (no external datasets required)."""
@@ -338,13 +361,13 @@ def train_default_edge_student(
         swing = planar_circular_swing(
             fs_hz=INPUT_FS_HZ,
             casting=casting,
-            casting_lead_s=float(rng.uniform(0.05, 0.14)) if casting else 0.0,
-            radius_m=float(rng.uniform(0.40, 0.70)),
-            backswing_s=float(rng.uniform(0.65, 0.90)),
-            downswing_s=float(rng.uniform(0.20, 0.32)),
-            top_angle_deg=float(rng.uniform(95.0, 125.0)),
-            plane_tilt_deg=float(rng.uniform(45.0, 65.0)),
-            impact_shock_g=float(rng.uniform(2.0, 8.0)),
+            casting_lead_s=float(rng.uniform(0.04, 0.15)) if casting else 0.0,
+            radius_m=float(rng.uniform(0.38, 0.75)),
+            backswing_s=float(rng.uniform(0.60, 0.95)),
+            downswing_s=float(rng.uniform(0.18, 0.35)),
+            top_angle_deg=float(rng.uniform(90.0, 130.0)),
+            plane_tilt_deg=float(rng.uniform(40.0, 70.0)),
+            impact_shock_g=float(rng.uniform(1.5, 10.0)),
         )
         packets.append(swing.packet)
     return fit_edge_student(packets, seed=seed)
@@ -359,7 +382,7 @@ def ensure_default_artifact(
     path = Path(path) if path is not None else _DEFAULT_ARTIFACT
     if path.is_file() and not force:
         return path
-    student = train_default_edge_student(seed=0, n_train=24)
+    student = train_default_edge_student(seed=0, n_train=512)
     return student.save(path)
 
 
@@ -370,6 +393,7 @@ def artifact_metadata(path: str | Path | None = None) -> dict[str, Any]:
         "feature_dim": len(student.feature_names),
         "output_dim": int(student.W.shape[0]),
         "train_seed": student.train_seed,
+        "projection_seed": student.projection_seed,
         "n_train": student.n_train,
         "coreml_model_present": False,
         "note": "NumPy artifact only unless Core ML export was run on macOS",
