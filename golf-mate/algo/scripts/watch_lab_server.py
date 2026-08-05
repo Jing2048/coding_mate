@@ -34,13 +34,16 @@ from golfmate_algo.export.edge_trajectory_contract import (
     TRAJECTORY_POINTS,
     sample_trajectory_xyz,
 )
+from golfmate_algo.export.commercial_report import build_commercial_report
 
 
 def _jsonable(value: Any) -> Any:
     if isinstance(value, np.generic):
-        return value.item()
+        return _jsonable(value.item())
     if isinstance(value, np.ndarray):
-        return value.tolist()
+        return _jsonable(value.tolist())
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
     if isinstance(value, dict):
         return {str(k): _jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -111,6 +114,7 @@ def build_analysis_response(capture: Any, report: Any, impact_hint: float | None
         n_points=TRAJECTORY_POINTS,
     )
     preview = _preview_block(capture.metadata)
+    commercial = build_commercial_report(report).as_dict()
     final_block = {
         "trajectory": final_xyz.tolist(),
         "confidence": quality["confidence"],
@@ -118,7 +122,7 @@ def build_analysis_response(capture: Any, report: Any, impact_hint: float | None
         "pointCount": TRAJECTORY_POINTS,
         "source": "python_analyze_swing",
     }
-    return {
+    return _jsonable({
         "schemaVersion": "golfmate-watch-analysis-v1",
         "ok": True,
         "captureMode": capture.capture_mode,
@@ -135,20 +139,24 @@ def build_analysis_response(capture: Any, report: Any, impact_hint: float | None
         "finalTrajectory": final_xyz.tolist(),
         "trajectoryConfidence": quality["confidence"],
         "trajectoryQuality": quality,
+        "commercialReport": commercial,
         "preview": preview,
         "final": final_block,
         "meta": {
             "impact_mode": report.meta.get("impact_mode"),
             "impact_method": report.meta.get("impact_method"),
             "impact_confidence": report.meta.get("impact_confidence"),
+            "impact_provenance": report.meta.get("impact_provenance"),
             "fs_hz": report.meta.get("fs_hz"),
+            "truth_quality": report.meta.get("truth_quality"),
+            "feature_quality": report.meta.get("feature_quality"),
             "frame": report.meta.get("frame"),
             "pro_swing": report.meta.get("pro_swing"),
             "high_order": report.meta.get("high_order"),
             "capture_mode": capture.capture_mode,
             "trajectory": report.meta.get("trajectory"),
         },
-    }
+    })
 
 
 def analyze_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -179,7 +187,11 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[watch-lab] {self.address_string()} {fmt % args}")
 
     def _send(self, code: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(
+            _jsonable(payload),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

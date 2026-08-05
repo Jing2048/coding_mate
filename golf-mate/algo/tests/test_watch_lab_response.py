@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -95,6 +96,15 @@ def test_analyze_payload_includes_final_trajectory_and_mode():
     # Preview and final are distinct sources.
     assert result["preview"]["source"] != result["final"]["source"]
     assert "phases" in result and "features" in result
+    commercial = result["commercialReport"]
+    assert commercial["version"] == "commercial-swing-report-v2"
+    assert commercial["truth"]
+    assert all("kind" in metric and "validity" in metric for metric in commercial["truth"])
+    assert result["meta"]["truth_quality"] is not None
+    assert result["meta"]["feature_quality"] is not None
+    # iOS JSONDecoder requires standards-compliant JSON; abstained inferred
+    # values must be null, never NaN/Infinity.
+    json.dumps(result, allow_nan=False)
 
 
 def test_analyze_bytes_packed_v2():

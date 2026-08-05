@@ -3,6 +3,14 @@ import Foundation
 import WatchConnectivity
 
 final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate {
+    enum ConnectionState: Equatable {
+        case activating
+        case paired
+        case notPaired
+        case unsupported
+        case failed(String)
+    }
+
     static let shared = PhoneCaptureReceiver()
 
     @Published private(set) var latestCaptureURL: URL?
@@ -13,10 +21,14 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
     @Published private(set) var latestPreview: EdgeTrajectoryPreview?
     @Published private(set) var latestPreviewSessionID: String?
     @Published private(set) var errorMessage: String?
+    @Published private(set) var connectionState: ConnectionState = .activating
 
     private override init() {
         super.init()
-        guard WCSession.isSupported() else { return }
+        guard WCSession.isSupported() else {
+            connectionState = .unsupported
+            return
+        }
         WCSession.default.delegate = self
         WCSession.default.activate()
     }
@@ -26,11 +38,27 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
     ) {
-        DispatchQueue.main.async { self.errorMessage = error?.localizedDescription }
+        DispatchQueue.main.async {
+            if let error {
+                self.connectionState = .failed(error.localizedDescription)
+                self.errorMessage = error.localizedDescription
+            } else if activationState == .activated, session.isPaired {
+                self.connectionState = .paired
+                self.errorMessage = nil
+            } else {
+                self.connectionState = .notPaired
+            }
+        }
     }
 
     func sessionDidBecomeInactive(_ session: WCSession) {}
     func sessionDidDeactivate(_ session: WCSession) { session.activate() }
+
+    func sessionWatchStateDidChange(_ session: WCSession) {
+        DispatchQueue.main.async {
+            self.connectionState = session.isPaired ? .paired : .notPaired
+        }
+    }
 
     func session(
         _ session: WCSession,

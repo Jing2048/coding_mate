@@ -14,6 +14,8 @@ final class AnalysisClient: ObservableObject {
     @Published private(set) var lastResult: SwingAnalysisResult?
     @Published private(set) var lastError: String?
     @Published private(set) var serverHealthy = false
+    @Published private(set) var isCheckingServer = false
+    @Published private(set) var lastAnalyzedURL: URL?
 
     private init() {}
 
@@ -22,6 +24,8 @@ final class AnalysisClient: ObservableObject {
     }
 
     func ping() async {
+        isCheckingServer = true
+        defer { isCheckingServer = false }
         guard let url = URL(string: serverURLString.trimmingCharacters(in: .whitespaces))?
             .appending(path: "health")
         else {
@@ -80,11 +84,15 @@ final class AnalysisClient: ObservableObject {
                 throw AnalysisError.server(decoded.error ?? "analysis failed")
             }
             lastResult = decoded
+            lastAnalyzedURL = url
             serverHealthy = true
         } catch {
-            lastResult = nil
             lastError = error.localizedDescription
         }
+    }
+
+    func clearError() {
+        lastError = nil
     }
 }
 
@@ -100,8 +108,8 @@ private enum AnalysisError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .badURL: "Analysis URL is invalid"
-        case .badResponse: "Analysis server returned an empty response"
+        case .badURL: "分析服务地址无效。"
+        case .badResponse: "分析服务没有返回有效结果。"
         case let .server(message): message
         }
     }

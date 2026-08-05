@@ -1,0 +1,116 @@
+{
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "挥杆" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Swing" } }
+      }
+    },
+    "设置" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Settings" } }
+      }
+    },
+    "等待 Apple Watch" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Waiting for Apple Watch" } }
+      }
+    },
+    "已收到预览轨迹" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Preview received" } }
+      }
+    },
+    "正在分析" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Analyzing" } }
+      }
+    },
+    "分析完成" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Analysis complete" } }
+      }
+    },
+    "查看挥杆分析" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "View swing analysis" } }
+      }
+    },
+    "质量与可信度" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Quality and trust" } }
+      }
+    },
+    "关注指标" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Focus metrics" } }
+      }
+    },
+    "可引用指标" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Reliable metrics" } }
+      }
+    },
+    "推断与代理指标" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Inferred and proxy metrics" } }
+      }
+    },
+    "阶段时间轴" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Phase timeline" } }
+      }
+    },
+    "就位" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Ready" } }
+      }
+    },
+    "准备采集" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Preparing" } }
+      }
+    },
+    "采集中" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Recording" } }
+      }
+    },
+    "正在保存" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Saving" } }
+      }
+    },
+    "已保存" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Saved" } }
+      }
+    },
+    "开始采集" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Start capture" } }
+      }
+    },
+    "完成" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Finish" } }
+      }
+    },
+    "再来一杆" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Next swing" } }
+      }
+    },
+    "腕部轨迹预览" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Wrist path preview" } }
+      }
+    },
+    "完整分析将在 iPhone 更新" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Full analysis will update on iPhone" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}
