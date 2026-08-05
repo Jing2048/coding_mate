@@ -114,6 +114,10 @@ class DiagnosticFinding:
     message: str
     evidence: dict[str, float] = field(default_factory=dict)
     is_proxy: bool = True
+    # Commercial semantics: measured | derived | proxy | inferred.
+    # High-order PCR findings must use kind="inferred" and is_proxy=True
+    # (never claim measured / is_proxy=False).
+    kind: str = "proxy"
 
 
 @dataclass

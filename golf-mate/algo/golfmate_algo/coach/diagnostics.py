@@ -181,9 +181,11 @@ def diagnose(
                     )
                 )
 
-    # High-order inferred wrist / clubface / sequence (PCR latent body)
+    # High-order inferred wrist / clubface / sequence (PCR latent body).
+    # These are NEVER measured: keep is_proxy=True and kind="inferred".
     if high_order and high_order.get("kind") == "inferred":
         conf = float(high_order.get("confidence", 0.0))
+        residual = float(high_order.get("residual", float("nan")))
         wrist = high_order.get("wrist") or {}
         club = high_order.get("club") or {}
         body = high_order.get("body") or {}
@@ -203,8 +205,10 @@ def diagnose(
                             "fe_impact_deg": fe_imp,
                             "fe_delta_deg": fe_d,
                             "confidence": conf,
+                            "residual": residual,
                         },
-                        is_proxy=False,
+                        is_proxy=True,
+                        kind="inferred",
                     )
                 )
             elif np.isfinite(fe_d) and fe_d > 8.0:
@@ -220,8 +224,10 @@ def diagnose(
                             "fe_impact_deg": fe_imp,
                             "fe_delta_deg": fe_d,
                             "confidence": conf,
+                            "residual": residual,
                         },
-                        is_proxy=False,
+                        is_proxy=True,
+                        kind="inferred",
                     )
                 )
 
@@ -236,8 +242,13 @@ def diagnose(
                             "Inferred clubface is open at impact "
                             "(single-IMU PCR; not a launch-monitor reading)."
                         ),
-                        evidence={"face_impact_deg": face_deg, "confidence": conf},
-                        is_proxy=False,
+                        evidence={
+                            "face_impact_deg": face_deg,
+                            "confidence": conf,
+                            "residual": residual,
+                        },
+                        is_proxy=True,
+                        kind="inferred",
                     )
                 )
             elif face_state == "closed" and conf >= 0.4:
@@ -249,8 +260,13 @@ def diagnose(
                             "Inferred clubface is closed at impact "
                             "(single-IMU PCR; not a launch-monitor reading)."
                         ),
-                        evidence={"face_impact_deg": face_deg, "confidence": conf},
-                        is_proxy=False,
+                        evidence={
+                            "face_impact_deg": face_deg,
+                            "confidence": conf,
+                            "residual": residual,
+                        },
+                        is_proxy=True,
+                        kind="inferred",
                     )
                 )
 
@@ -264,11 +280,17 @@ def diagnose(
                             "out of sequence (PCR latent model)."
                         ),
                         evidence={
-                            "pelvis_peak_to_impact_s": body.get("pelvis_peak_to_impact_s"),
-                            "club_peak_to_impact_s": body.get("club_peak_to_impact_s"),
+                            "pelvis_peak_to_impact_s": float(
+                                body.get("pelvis_peak_to_impact_s", float("nan"))
+                            ),
+                            "club_peak_to_impact_s": float(
+                                body.get("club_peak_to_impact_s", float("nan"))
+                            ),
                             "confidence": conf,
+                            "residual": residual,
                         },
-                        is_proxy=False,
+                        is_proxy=True,
+                        kind="inferred",
                     )
                 )
 

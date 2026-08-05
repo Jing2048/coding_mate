@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 from typing import Any
 
 
@@ -22,14 +23,89 @@ class Validity(str, Enum):
 
 @dataclass
 class MetricEstimate:
+    """Strict commercial metric: kind + validity + confidence + residual + units.
+
+    ``residual`` is model/fit residual when available (e.g. PCR reconstruction,
+    plane fit RMS); use ``nan`` when not applicable. Every commercial export
+    metric must populate all of these fields.
+    """
+
     name: str
     value: float
     units: str
     kind: MetricKind
     confidence: float
     validity: Validity
+    residual: float = float("nan")
     reasons: list[str] = field(default_factory=list)
     extras: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        def _finite_or_none(value: float | None) -> float | None:
+            if value is None:
+                return None
+            out = float(value)
+            return out if math.isfinite(out) else None
+
+        return {
+            "name": self.name,
+            "value": _finite_or_none(self.value),
+            "units": self.units,
+            "kind": self.kind.value if isinstance(self.kind, MetricKind) else str(self.kind),
+            "validity": (
+                self.validity.value
+                if isinstance(self.validity, Validity)
+                else str(self.validity)
+            ),
+            "confidence": float(self.confidence),
+            "residual": _finite_or_none(self.residual),
+            "reasons": list(self.reasons),
+            "extras": dict(self.extras),
+        }
+
+
+REQUIRED_METRIC_KEYS: tuple[str, ...] = (
+    "name",
+    "value",
+    "units",
+    "kind",
+    "validity",
+    "confidence",
+    "residual",
+)
+
+
+def validate_metric_dict(d: dict[str, Any]) -> None:
+    """Raise ValueError if a serialized metric is missing required commercial fields."""
+    missing = [k for k in REQUIRED_METRIC_KEYS if k not in d]
+    if missing:
+        raise ValueError(f"metric missing required keys: {missing}")
+    kind = d["kind"]
+    if kind not in {m.value for m in MetricKind}:
+        raise ValueError(f"invalid metric kind: {kind!r}")
+    validity = d["validity"]
+    if validity not in {v.value for v in Validity}:
+        raise ValueError(f"invalid metric validity: {validity!r}")
+    confidence = d["confidence"]
+    if (
+        not isinstance(confidence, (int, float))
+        or not math.isfinite(float(confidence))
+        or not 0.0 <= float(confidence) <= 1.0
+    ):
+        raise ValueError("metric.confidence must be finite in [0,1]")
+    value = d["value"]
+    if validity == Validity.ABSTAIN.value:
+        if value is not None and (
+            not isinstance(value, (int, float)) or not math.isfinite(float(value))
+        ):
+            raise ValueError("abstained metric.value must be finite or null")
+    elif not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise ValueError("non-abstained metric.value must be finite")
+    residual = d["residual"]
+    if residual is not None and (
+        not isinstance(residual, (int, float)) or not math.isfinite(float(residual))
+    ):
+        raise ValueError("metric.residual must be finite or null")
 
 
 def clip_confidence(x: float) -> float:

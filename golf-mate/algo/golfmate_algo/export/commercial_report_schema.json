@@ -1,0 +1,79 @@
+{
+  "contract_version": "commercial-swing-report-v2",
+  "description": "Commercial biomechanics report with strict metric semantics. Every metric carries kind, validity, confidence, residual, units, and value. Personal/practice/strategy sections are schema placeholders until the personal engine ships.",
+  "metric_kinds": ["measured", "derived", "proxy", "inferred"],
+  "validity": ["ok", "degraded", "abstain"],
+  "required_metric_keys": [
+    "name",
+    "value",
+    "units",
+    "kind",
+    "validity",
+    "confidence",
+    "residual"
+  ],
+  "sections": {
+    "truth": {
+      "description": "Citeable wrist / timing / trajectory P0 metrics (measured or derived).",
+      "metric_names": [
+        "tempo_s",
+        "backswing_s",
+        "downswing_s",
+        "rhythm",
+        "peak_omega_rad_s",
+        "peak_omega_to_impact_s",
+        "hand_speed_peak_m_s",
+        "plane_angle_deg",
+        "trajectory_radius_m"
+      ]
+    },
+    "inference": {
+      "description": "Proxy and inferred high-order metrics. Never claim measured / launch-monitor truth.",
+      "metric_names": [
+        "wrist_fe_impact_deg",
+        "wrist_fe_delta_address_to_impact_deg",
+        "wrist_ru_impact_deg",
+        "clubface_impact_deg",
+        "shaft_lean_impact_deg",
+        "x_factor_top_deg",
+        "x_factor_proxy_deg",
+        "sequence_score_proxy",
+        "casting_onset_s",
+        "segment_twist_rate_proxy_rad_s",
+        "high_order_residual"
+      ]
+    },
+    "personal_baseline": {
+      "version": "personal-baseline-v1",
+      "implemented": false,
+      "description": "Signed errors vs personal biomech prior. Placeholder only in this release."
+    },
+    "practice_loop": {
+      "version": "practice-loop-v1",
+      "implemented": false,
+      "fields": [
+        "focus_kpi",
+        "in_window",
+        "correction_direction",
+        "session_consistency"
+      ],
+      "description": "Next-shot correction features for practice loop. Schema frozen; engine not wired."
+    },
+    "strategy": {
+      "version": "strategy-v1",
+      "implemented": false,
+      "fields": [
+        "tempo_under_pressure",
+        "dispersion",
+        "miss_bias",
+        "consistency_decay"
+      ],
+      "description": "Round strategy / SG precursor features. Schema frozen; engine not wired."
+    }
+  },
+  "finding_rules": {
+    "inferred_must_set_is_proxy": true,
+    "allowed_kinds": ["measured", "derived", "proxy", "inferred"]
+  },
+  "swing_report_compatibility": "CommercialSwingReport is an export projection; SwingReport fields and pipeline return type are unchanged."
+}
