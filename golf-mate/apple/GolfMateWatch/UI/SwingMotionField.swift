@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Low-ink wrist-plane preview. Never implies club path.
 struct SwingMotionField: View {
     let active: Bool
     let points: [TrajectoryPoint]
@@ -7,107 +8,107 @@ struct SwingMotionField: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
-    var body: some View {
-        TimelineView(
-            .animation(
-                minimumInterval: isLuminanceReduced ? 1 : 1 / 30,
-                paused: reduceMotion || !active
-            )
-        ) { timeline in
-            Canvas { context, size in
-                let rect = CGRect(
-                    x: size.width * 0.08,
-                    y: size.height * 0.12,
-                    width: size.width * 0.84,
-                    height: size.height * 0.70
-                )
+    private var prefersStatic: Bool {
+        reduceMotion || isLuminanceReduced || !active
+    }
 
-                let rendered = projectedPoints(in: rect)
-                var orbit = Path()
-                if let first = rendered.first {
-                    orbit.move(to: first)
-                    for point in rendered.dropFirst() {
-                        orbit.addLine(to: point)
-                    }
-                } else {
-                    orbit.addArc(
-                        center: CGPoint(x: rect.midX, y: rect.midY + 5),
-                        radius: rect.width * 0.43,
-                        startAngle: .degrees(205),
-                        endAngle: .degrees(-18),
-                        clockwise: false
-                    )
+    var body: some View {
+        Group {
+            if prefersStatic {
+                fieldCanvas(phase: 1)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: false)) { timeline in
+                    let t = timeline.date.timeIntervalSinceReferenceDate
+                    let phase = (t * 0.28).truncatingRemainder(dividingBy: 1)
+                    fieldCanvas(phase: phase)
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilitySummary)
+        .accessibilityHint("腕部运动示意，非球杆路径")
+        .privacySensitive()
+    }
+
+    private func fieldCanvas(phase: Double) -> some View {
+        Canvas { context, size in
+            let rect = CGRect(
+                x: size.width * 0.10,
+                y: size.height * 0.14,
+                width: size.width * 0.80,
+                height: size.height * 0.68
+            )
+            let rendered = projectedPoints(in: rect)
+
+            if rendered.count >= 2 {
+                var stroke = Path()
+                stroke.move(to: rendered[0])
+                for point in rendered.dropFirst() {
+                    stroke.addLine(to: point)
                 }
                 context.stroke(
-                    orbit,
-                    with: .linearGradient(
-                        Gradient(colors: [
-                            .mint.opacity(0.12),
-                            .cyan.opacity(0.95),
-                            .white.opacity(0.88),
-                        ]),
-                        startPoint: CGPoint(x: rect.minX, y: rect.maxY),
-                        endPoint: CGPoint(x: rect.maxX, y: rect.minY)
-                    ),
+                    stroke,
+                    with: .color(GolfTheme.live.opacity(active ? 0.85 : 0.55)),
                     style: StrokeStyle(
-                        lineWidth: active ? 4.5 : 2.5,
-                        lineCap: .round
+                        lineWidth: active ? 2.5 : 2,
+                        lineCap: .round,
+                        lineJoin: .round
                     )
                 )
 
-                let t = active
-                    ? timeline.date.timeIntervalSinceReferenceDate
-                    : 0.18
-                let phase = (t * 0.34).truncatingRemainder(dividingBy: 1)
-                let fallbackAngle = Angle.degrees(205 + 137 * phase)
-                let fallbackRadius = rect.width * 0.43
-                let fallback = CGPoint(
-                    x: rect.midX + cos(fallbackAngle.radians) * fallbackRadius,
-                    y: rect.midY + 5 + sin(fallbackAngle.radians) * fallbackRadius
-                )
-                let point: CGPoint
-                if rendered.isEmpty {
-                    point = fallback
+                let tip: CGPoint
+                if prefersStatic {
+                    tip = rendered.last!
                 } else {
                     let index = min(
                         rendered.count - 1,
-                        Int(phase * Double(rendered.count))
+                        max(0, Int(phase * Double(rendered.count)))
                     )
-                    point = rendered[index]
+                    tip = rendered[index]
                 }
-                let glow = CGRect(
-                    x: point.x - 8,
-                    y: point.y - 8,
-                    width: 16,
-                    height: 16
-                )
-                context.fill(
-                    Path(ellipseIn: glow),
-                    with: .radialGradient(
-                        Gradient(colors: [.white, .cyan.opacity(0)]),
-                        center: point,
-                        startRadius: 0,
-                        endRadius: 10
-                    )
-                )
-
-                var axis = Path()
-                axis.move(to: CGPoint(x: rect.midX, y: rect.midY - 20))
-                axis.addLine(to: point)
-                context.stroke(
-                    axis,
-                    with: .color(.cyan.opacity(active ? 0.30 : 0.12)),
-                    style: StrokeStyle(lineWidth: 1, dash: [2, 4])
-                )
+                drawCurrentPoint(context: context, at: tip, emphasized: active)
+            } else {
+                // Quiet static wrist posture — no decorative orbit or screensaver.
+                let rest = CGPoint(x: rect.midX, y: rect.midY + rect.height * 0.08)
+                drawCurrentPoint(context: context, at: rest, emphasized: false)
             }
         }
-        .accessibilityHidden(true)
+    }
+
+    private func drawCurrentPoint(
+        context: GraphicsContext,
+        at point: CGPoint,
+        emphasized: Bool
+    ) {
+        let radius: CGFloat = emphasized ? 4 : 3
+        let oval = CGRect(
+            x: point.x - radius,
+            y: point.y - radius,
+            width: radius * 2,
+            height: radius * 2
+        )
+        context.fill(
+            Path(ellipseIn: oval),
+            with: .color(emphasized ? GolfTheme.live : Color.primary.opacity(0.45))
+        )
+    }
+
+    private var accessibilitySummary: String {
+        if points.count >= 2 {
+            if active {
+                return "腕部轨迹进行中，已记录 \(points.count) 个采样点"
+            }
+            return "腕部轨迹预览，共 \(points.count) 个采样点"
+        }
+        if active {
+            return "等待腕部运动数据"
+        }
+        return "腕部静止示意"
     }
 
     private func projectedPoints(in rect: CGRect) -> [CGPoint] {
         guard points.count >= 2 else { return [] }
-        // Render the dominant x/z wrist plane. Normalize only for the compact
-        // Watch viewport; metric coordinates remain in the transmitted packet.
+        // Dominant wrist x/z plane for the compact Watch viewport only.
         let xs = points.map(\.x)
         let zs = points.map(\.z)
         guard
