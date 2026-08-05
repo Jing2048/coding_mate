@@ -90,12 +90,54 @@ def test_high_order_findings_never_claim_measured():
         "wrist": {
             "fe_impact_deg": 12.0,
             "fe_delta_address_to_impact_deg": -8.0,
+            "validity": "ok",
+            "confidence": 0.7,
+            "residual": 0.2,
+            "metrics": {
+                "fe_impact": {
+                    "validity": "ok",
+                    "confidence": 0.7,
+                    "residual": 0.2,
+                    "reasons": ["calib_mae_within_ok_budget"],
+                },
+                "fe_delta_address_to_impact": {
+                    "validity": "ok",
+                    "confidence": 0.7,
+                    "residual": 0.2,
+                    "reasons": ["derived_fe_delta"],
+                },
+            },
         },
-        "club": {"face_open_closed": "open", "face_impact_deg": 6.0},
+        "club": {
+            "face_open_closed": "open",
+            "face_impact_deg": 6.0,
+            "validity": "ok",
+            "confidence": 0.7,
+            "residual": 0.2,
+            "metrics": {
+                "face_impact": {
+                    "validity": "ok",
+                    "confidence": 0.7,
+                    "residual": 0.2,
+                    "reasons": ["calib_mae_within_ok_budget"],
+                },
+            },
+        },
         "body": {
             "sequence_order_ok": False,
             "pelvis_peak_to_impact_s": 0.12,
             "club_peak_to_impact_s": 0.01,
+            "validity": "ok",
+            "confidence": 0.7,
+            "residual": 0.2,
+            "metrics": {
+                "x_factor_top": {
+                    "validity": "ok",
+                    "confidence": 0.7,
+                    "residual": 0.2,
+                    "reasons": ["calib_mae_within_ok_budget"],
+                },
+            },
         },
     }
     findings = diagnose(feats, high_order=high_order)

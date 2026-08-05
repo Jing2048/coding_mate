@@ -183,13 +183,49 @@ def diagnose(
 
     # High-order inferred wrist / clubface / sequence (PCR latent body).
     # These are NEVER measured: keep is_proxy=True and kind="inferred".
+    # Findings require the exact scalar(s) used to be non-abstained.
     if high_order and high_order.get("kind") == "inferred":
-        conf = float(high_order.get("confidence", 0.0))
-        residual = float(high_order.get("residual", float("nan")))
         wrist = high_order.get("wrist") or {}
         club = high_order.get("club") or {}
         body = high_order.get("body") or {}
-        if conf >= 0.35:
+
+        def _scalar_gate(
+            section: dict[str, Any],
+            metric_alias: str,
+            fallback_conf: float,
+            *,
+            min_conf: float = 0.35,
+        ) -> tuple[bool, float, float]:
+            """Gate on section.metrics[alias] when present; else head validity."""
+            metrics = section.get("metrics") if isinstance(section.get("metrics"), dict) else {}
+            entry = metrics.get(metric_alias) if isinstance(metrics, dict) else None
+            if isinstance(entry, dict) and "validity" in entry:
+                validity = str(entry.get("validity", "abstain"))
+                if validity == "abstain":
+                    return False, 0.0, float("nan")
+                conf = float(entry.get("confidence", fallback_conf))
+                residual = float(
+                    entry.get("residual", section.get("residual", high_order.get("residual", float("nan"))))
+                )
+                return conf >= min_conf, conf, residual
+            # Legacy path without metrics mapping: head-level gate.
+            validity = str(section.get("validity", high_order.get("validity", "degraded")))
+            if validity == "abstain":
+                return False, 0.0, float("nan")
+            conf = float(section.get("confidence", fallback_conf))
+            residual = float(section.get("residual", high_order.get("residual", float("nan"))))
+            return conf >= min_conf, conf, residual
+
+        global_conf = float(high_order.get("confidence", 0.0))
+        fe_ok, fe_conf, fe_resid = _scalar_gate(wrist, "fe_impact", global_conf)
+        delta_ok, delta_conf, delta_resid = _scalar_gate(
+            wrist, "fe_delta_address_to_impact", global_conf
+        )
+        if fe_ok and delta_ok:
+            wrist_conf = min(fe_conf, delta_conf)
+            wrist_resid = (
+                fe_resid if np.isfinite(fe_resid) else delta_resid
+            )
             fe_imp = float(wrist.get("fe_impact_deg", float("nan")))
             fe_d = float(wrist.get("fe_delta_address_to_impact_deg", float("nan")))
             if np.isfinite(fe_d) and fe_d < -5.0:
@@ -204,8 +240,10 @@ def diagnose(
                         evidence={
                             "fe_impact_deg": fe_imp,
                             "fe_delta_deg": fe_d,
-                            "confidence": conf,
-                            "residual": residual,
+                            "confidence": wrist_conf,
+                            "residual": wrist_resid,
+                            "head": "wrist",
+                            "metrics": ["fe_impact", "fe_delta_address_to_impact"],
                         },
                         is_proxy=True,
                         kind="inferred",
@@ -223,17 +261,23 @@ def diagnose(
                         evidence={
                             "fe_impact_deg": fe_imp,
                             "fe_delta_deg": fe_d,
-                            "confidence": conf,
-                            "residual": residual,
+                            "confidence": wrist_conf,
+                            "residual": wrist_resid,
+                            "head": "wrist",
+                            "metrics": ["fe_impact", "fe_delta_address_to_impact"],
                         },
                         is_proxy=True,
                         kind="inferred",
                     )
                 )
 
+        face_ok, club_conf, club_resid = _scalar_gate(
+            club, "face_impact", global_conf, min_conf=0.4
+        )
+        if face_ok:
             face_state = str(club.get("face_open_closed", "square"))
             face_deg = float(club.get("face_impact_deg", float("nan")))
-            if face_state == "open" and conf >= 0.4:
+            if face_state == "open":
                 findings.append(
                     DiagnosticFinding(
                         code="clubface_open_impact",
@@ -244,14 +288,16 @@ def diagnose(
                         ),
                         evidence={
                             "face_impact_deg": face_deg,
-                            "confidence": conf,
-                            "residual": residual,
+                            "confidence": club_conf,
+                            "residual": club_resid,
+                            "head": "club",
+                            "metrics": ["face_impact"],
                         },
                         is_proxy=True,
                         kind="inferred",
                     )
                 )
-            elif face_state == "closed" and conf >= 0.4:
+            elif face_state == "closed":
                 findings.append(
                     DiagnosticFinding(
                         code="clubface_closed_impact",
@@ -262,36 +308,49 @@ def diagnose(
                         ),
                         evidence={
                             "face_impact_deg": face_deg,
-                            "confidence": conf,
-                            "residual": residual,
+                            "confidence": club_conf,
+                            "residual": club_resid,
+                            "head": "club",
+                            "metrics": ["face_impact"],
                         },
                         is_proxy=True,
                         kind="inferred",
                     )
                 )
 
-            if body.get("sequence_order_ok") is False and conf >= 0.35:
-                findings.append(
-                    DiagnosticFinding(
-                        code="kinematic_sequence_out_of_order",
-                        severity="warn",
-                        message=(
-                            "Inferred pelvis→torso→arm→club peak order looks "
-                            "out of sequence (PCR latent model)."
+        # Sequence finding uses body peak timings; require body head + x_factor
+        # scalar (only body scalar with MAE budget) non-abstained.
+        body_head_ok = str(body.get("validity", high_order.get("validity", "degraded"))) != "abstain"
+        xf_ok, body_conf, body_resid = _scalar_gate(body, "x_factor_top", global_conf)
+        if (
+            body_head_ok
+            and xf_ok
+            and body.get("sequence_order_ok") is False
+            and body_conf >= 0.35
+        ):
+            findings.append(
+                DiagnosticFinding(
+                    code="kinematic_sequence_out_of_order",
+                    severity="warn",
+                    message=(
+                        "Inferred pelvis→torso→arm→club peak order looks "
+                        "out of sequence (PCR latent model)."
+                    ),
+                    evidence={
+                        "pelvis_peak_to_impact_s": float(
+                            body.get("pelvis_peak_to_impact_s", float("nan"))
                         ),
-                        evidence={
-                            "pelvis_peak_to_impact_s": float(
-                                body.get("pelvis_peak_to_impact_s", float("nan"))
-                            ),
-                            "club_peak_to_impact_s": float(
-                                body.get("club_peak_to_impact_s", float("nan"))
-                            ),
-                            "confidence": conf,
-                            "residual": residual,
-                        },
-                        is_proxy=True,
-                        kind="inferred",
-                    )
+                        "club_peak_to_impact_s": float(
+                            body.get("club_peak_to_impact_s", float("nan"))
+                        ),
+                        "confidence": body_conf,
+                        "residual": body_resid,
+                        "head": "body",
+                        "metrics": ["x_factor_top"],
+                    },
+                    is_proxy=True,
+                    kind="inferred",
                 )
+            )
 
     return findings

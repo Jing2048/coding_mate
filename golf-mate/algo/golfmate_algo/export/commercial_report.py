@@ -584,18 +584,59 @@ def _build_inference_metrics(report: SwingReport) -> list[MetricEstimate]:
             )
         return out
 
-    conf = float(high.get("confidence", 0.3))
-    residual = float(high.get("residual", float("nan")))
+    overall_conf = float(high.get("confidence", 0.3))
+    overall_residual = float(high.get("residual", float("nan")))
     try:
-        validity = Validity(str(high.get("validity", "degraded")))
+        overall_validity = Validity(str(high.get("validity", "degraded")))
     except ValueError:
-        validity = Validity.DEGRADED
+        overall_validity = Validity.DEGRADED
     wrist = high.get("wrist") or {}
     club = high.get("club") or {}
     body = high.get("body") or {}
-    reasons = ["high_order_pcr"]
 
-    def _inf(name: str, value: float, units: str) -> MetricEstimate:
+    def _head_meta(section: dict[str, Any]) -> tuple[Validity, float, float, list[str]]:
+        """Per-head validity/confidence/residual (falls back to overall)."""
+        try:
+            v = Validity(str(section.get("validity", overall_validity.value)))
+        except ValueError:
+            v = overall_validity
+        c = float(section.get("confidence", overall_conf))
+        r = float(section.get("residual", overall_residual))
+        reasons = list(section.get("reasons") or [])
+        if not reasons:
+            reasons = list(high.get("reasons") or ["high_order_pcr"])
+        return v, c, r, reasons
+
+    def _metric_meta(
+        section: dict[str, Any],
+        metric_alias: str,
+    ) -> tuple[Validity, float, float, list[str]]:
+        """Prefer per-scalar metrics[alias]; fall back to head status only if absent."""
+        metrics = section.get("metrics") if isinstance(section.get("metrics"), dict) else {}
+        entry = metrics.get(metric_alias) if isinstance(metrics, dict) else None
+        if isinstance(entry, dict) and "validity" in entry:
+            try:
+                v = Validity(str(entry.get("validity", "abstain")))
+            except ValueError:
+                v = Validity.ABSTAIN
+            c = float(entry.get("confidence", overall_conf))
+            r = float(entry.get("residual", section.get("residual", overall_residual)))
+            reasons = list(entry.get("reasons") or ["scalar_mae_budget"])
+            return v, c, r, reasons
+        return _head_meta(section)
+
+    def _inf(
+        name: str,
+        value: float,
+        units: str,
+        *,
+        section: dict[str, Any],
+        head: str,
+        metric_alias: str,
+    ) -> MetricEstimate:
+        validity, conf, residual, reasons = _metric_meta(section, metric_alias)
+        if validity == Validity.ABSTAIN:
+            value = float("nan")
         return _metric(
             name,
             value,
@@ -605,34 +646,73 @@ def _build_inference_metrics(report: SwingReport) -> list[MetricEstimate]:
             validity,
             residual=residual,
             reasons=reasons,
-            extras={"source": str(high.get("source", "high_order_pcr"))},
+            extras={
+                "source": str(high.get("source", "high_order_pcr")),
+                "head": head,
+                "metric": metric_alias,
+            },
         )
 
     out.extend(
         [
-            _inf("wrist_fe_impact_deg", float(wrist.get("fe_impact_deg", float("nan"))), "deg"),
+            _inf(
+                "wrist_fe_impact_deg",
+                float(wrist.get("fe_impact_deg", float("nan"))),
+                "deg",
+                section=wrist,
+                head="wrist",
+                metric_alias="fe_impact",
+            ),
             _inf(
                 "wrist_fe_delta_address_to_impact_deg",
                 float(wrist.get("fe_delta_address_to_impact_deg", float("nan"))),
                 "deg",
+                section=wrist,
+                head="wrist",
+                metric_alias="fe_delta_address_to_impact",
             ),
-            _inf("wrist_ru_impact_deg", float(wrist.get("ru_impact_deg", float("nan"))), "deg"),
-            _inf("clubface_impact_deg", float(club.get("face_impact_deg", float("nan"))), "deg"),
+            _inf(
+                "wrist_ru_impact_deg",
+                float(wrist.get("ru_impact_deg", float("nan"))),
+                "deg",
+                section=wrist,
+                head="wrist",
+                metric_alias="ru_impact",
+            ),
+            _inf(
+                "clubface_impact_deg",
+                float(club.get("face_impact_deg", float("nan"))),
+                "deg",
+                section=club,
+                head="club",
+                metric_alias="face_impact",
+            ),
             _inf(
                 "shaft_lean_impact_deg",
                 float(club.get("shaft_lean_impact_deg", float("nan"))),
                 "deg",
+                section=club,
+                head="club",
+                metric_alias="shaft_lean_impact",
             ),
-            _inf("x_factor_top_deg", float(body.get("x_factor_top_deg", float("nan"))), "deg"),
+            _inf(
+                "x_factor_top_deg",
+                float(body.get("x_factor_top_deg", float("nan"))),
+                "deg",
+                section=body,
+                head="body",
+                metric_alias="x_factor_top",
+            ),
             _metric(
                 "high_order_residual",
-                residual,
+                overall_residual,
                 "1",
                 MetricKind.INFERRED,
-                conf,
-                validity,
-                residual=residual,
-                reasons=reasons,
+                overall_conf,
+                overall_validity,
+                residual=overall_residual,
+                reasons=list(high.get("reasons") or ["high_order_pcr"]),
+                extras={"source": str(high.get("source", "high_order_pcr")), "head": "overall"},
             ),
         ]
     )
