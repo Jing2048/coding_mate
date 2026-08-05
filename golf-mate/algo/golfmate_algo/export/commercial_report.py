@@ -24,6 +24,12 @@ from golfmate_algo.quality.uncertainty import (
     trajectory_validity,
     validate_metric_dict,
 )
+from golfmate_algo.quality.truth_quality import (
+    IMPACT_PROVENANCE_ABSTAIN,
+    IMPACT_PROVENANCE_COLLISION,
+    IMPACT_PROVENANCE_KINEMATIC,
+    commercial_impact_provenance,
+)
 from golfmate_algo.types import DiagnosticFinding, SwingReport
 
 CONTRACT_VERSION = "commercial-swing-report-v2"
@@ -217,15 +223,24 @@ def _metric(
     reasons: list[str] | None = None,
     extras: dict[str, Any] | None = None,
 ) -> MetricEstimate:
+    metric_reasons = list(reasons or [])
+    metric_validity = validity
+    metric_confidence = float(confidence)
+    metric_value = float(value)
+    if not math.isfinite(metric_value):
+        metric_validity = Validity.ABSTAIN
+        metric_confidence = min(metric_confidence, 0.1)
+        if "value_unavailable" not in metric_reasons:
+            metric_reasons.append("value_unavailable")
     return MetricEstimate(
         name=name,
-        value=float(value),
+        value=metric_value,
         units=units,
         kind=kind,
-        confidence=clip_confidence(float(confidence)),
-        validity=validity,
+        confidence=clip_confidence(metric_confidence),
+        validity=metric_validity,
         residual=float(residual),
-        reasons=list(reasons or []),
+        reasons=metric_reasons,
         extras=dict(extras or {}),
     )
 
@@ -252,6 +267,27 @@ def _radius_from_report(meta: dict[str, Any]) -> float:
     return float("nan")
 
 
+def _layer_from_meta(meta: dict[str, Any], section: str, name: str) -> dict[str, Any] | None:
+    block = meta.get(section)
+    if not isinstance(block, dict):
+        return None
+    if section == "truth_quality":
+        layers = block.get("layers") or {}
+        layer = layers.get(name)
+        return layer if isinstance(layer, dict) else None
+    layer = block.get(name)
+    return layer if isinstance(layer, dict) else None
+
+
+def _validity_from_layer(layer: dict[str, Any] | None, default: Validity) -> Validity:
+    if not layer:
+        return default
+    try:
+        return Validity(str(layer.get("validity", default.value)))
+    except ValueError:
+        return default
+
+
 def _build_truth_metrics(report: SwingReport) -> list[MetricEstimate]:
     f = report.features
     meta = report.meta if isinstance(report.meta, dict) else {}
@@ -265,23 +301,83 @@ def _build_truth_metrics(report: SwingReport) -> list[MetricEstimate]:
         rank=rank,
         fallback=fallback,
     )
+    # Prefer pipeline truth-quality trajectory layer when present.
+    traj_layer = _layer_from_meta(meta, "truth_quality", "trajectory")
+    if traj_layer:
+        traj_v = _validity_from_layer(traj_layer, traj_v)
+        traj_conf = clip_confidence(float(traj_layer.get("confidence", traj_conf)))
+        traj_reasons = list(traj_layer.get("reasons") or traj_reasons)
 
     plane_residual = _meta_float(meta, "plane_residual_rms", float("nan"))
     impact_mode = str(meta.get("impact_mode", "unknown"))
-    timing_conf = 0.85
-    timing_v = Validity.OK
-    timing_reasons: list[str] = []
-    if impact_mode in {"kinematic_proxy", "kinematic"}:
-        timing_conf *= 0.8
-        timing_reasons.append("impact_kinematic_proxy")
-        timing_v = Validity.DEGRADED
-    elif impact_mode in {"unavailable", "abstain"}:
-        timing_conf *= 0.4
-        timing_reasons.append("impact_unavailable")
-        timing_v = Validity.ABSTAIN
+    provenance = str(
+        meta.get("impact_provenance") or commercial_impact_provenance(impact_mode)
+    )
 
-    peak_conf = clip_confidence(0.9 if f.peak_omega_rad_s > 2.0 else 0.45)
-    peak_v = Validity.OK if f.peak_omega_rad_s > 2.0 else Validity.DEGRADED
+    timing_layer = _layer_from_meta(meta, "feature_quality", "tempo")
+    if timing_layer:
+        timing_v = _validity_from_layer(timing_layer, Validity.OK)
+        timing_conf = clip_confidence(float(timing_layer.get("confidence", 0.7)))
+        timing_reasons = list(timing_layer.get("reasons") or [])
+    else:
+        timing_conf = 0.85
+        timing_v = Validity.OK
+        timing_reasons = []
+        if provenance == IMPACT_PROVENANCE_KINEMATIC or impact_mode in {
+            "kinematic_proxy",
+            "kinematic",
+        }:
+            timing_conf *= 0.8
+            timing_reasons.append("impact_kinematic_not_collision")
+            timing_v = Validity.DEGRADED
+        elif provenance == IMPACT_PROVENANCE_ABSTAIN or impact_mode in {
+            "unavailable",
+            "abstain",
+        }:
+            timing_conf *= 0.4
+            timing_reasons.append("impact_unavailable")
+            timing_v = Validity.ABSTAIN
+
+    # Honesty: never silently claim collision timing when provenance abstains.
+    if provenance == IMPACT_PROVENANCE_ABSTAIN and timing_v == Validity.OK:
+        timing_v = Validity.ABSTAIN
+        timing_reasons = list(timing_reasons) + ["impact_unavailable"]
+    if traj_v == Validity.ABSTAIN and "trajectory_unavailable" not in traj_reasons:
+        traj_reasons = list(traj_reasons) + ["trajectory_unavailable"]
+
+    peak_layer = _layer_from_meta(meta, "feature_quality", "peak_omega")
+    if peak_layer:
+        peak_v = _validity_from_layer(peak_layer, Validity.OK)
+        peak_conf = clip_confidence(float(peak_layer.get("confidence", 0.7)))
+        peak_reasons = list(peak_layer.get("reasons") or [])
+    else:
+        peak_conf = clip_confidence(0.9 if f.peak_omega_rad_s > 2.0 else 0.45)
+        peak_v = Validity.OK if f.peak_omega_rad_s > 2.0 else Validity.DEGRADED
+        peak_reasons = [] if peak_v == Validity.OK else ["low_peak_omega"]
+
+    plane_layer = _layer_from_meta(meta, "feature_quality", "plane")
+    if plane_layer:
+        plane_v = _validity_from_layer(plane_layer, Validity.DEGRADED)
+        plane_conf = clip_confidence(float(plane_layer.get("confidence", 0.5)))
+        plane_reasons = list(plane_layer.get("reasons") or [])
+    else:
+        plane_ok = math.isfinite(plane_residual) and plane_residual < 0.08
+        plane_v = Validity.OK if plane_ok else Validity.DEGRADED
+        plane_conf = clip_confidence(0.75 if plane_ok else 0.45)
+        plane_reasons = [] if plane_ok else ["plane_residual_high"]
+
+    path_layer = _layer_from_meta(meta, "feature_quality", "path")
+    if path_layer:
+        path_v = _validity_from_layer(path_layer, traj_v)
+        path_conf = clip_confidence(float(path_layer.get("confidence", traj_conf)))
+        path_reasons = list(path_layer.get("reasons") or traj_reasons)
+    else:
+        path_v, path_conf, path_reasons = traj_v, traj_conf, traj_reasons
+
+    impact_extras = {
+        "impact_provenance": provenance,
+        "impact_mode_internal": impact_mode,
+    }
 
     return [
         _metric(
@@ -292,6 +388,7 @@ def _build_truth_metrics(report: SwingReport) -> list[MetricEstimate]:
             timing_conf,
             timing_v,
             reasons=timing_reasons,
+            extras=impact_extras,
         ),
         _metric(
             "backswing_s",
@@ -301,6 +398,7 @@ def _build_truth_metrics(report: SwingReport) -> list[MetricEstimate]:
             timing_conf,
             timing_v,
             reasons=timing_reasons,
+            extras=impact_extras,
         ),
         _metric(
             "downswing_s",
@@ -310,6 +408,7 @@ def _build_truth_metrics(report: SwingReport) -> list[MetricEstimate]:
             timing_conf,
             timing_v,
             reasons=timing_reasons,
+            extras=impact_extras,
         ),
         _metric(
             "rhythm",
@@ -319,6 +418,7 @@ def _build_truth_metrics(report: SwingReport) -> list[MetricEstimate]:
             timing_conf,
             timing_v,
             reasons=timing_reasons,
+            extras=impact_extras,
         ),
         _metric(
             "peak_omega_rad_s",
@@ -327,7 +427,7 @@ def _build_truth_metrics(report: SwingReport) -> list[MetricEstimate]:
             MetricKind.MEASURED,
             peak_conf,
             peak_v,
-            reasons=[] if peak_v == Validity.OK else ["low_peak_omega"],
+            reasons=peak_reasons,
         ),
         _metric(
             "peak_omega_to_impact_s",
@@ -337,30 +437,27 @@ def _build_truth_metrics(report: SwingReport) -> list[MetricEstimate]:
             timing_conf,
             timing_v,
             reasons=timing_reasons,
+            extras=impact_extras,
         ),
         _metric(
             "hand_speed_peak_m_s",
             f.hand_speed_peak_m_s,
             "m/s",
             MetricKind.DERIVED,
-            traj_conf,
-            traj_v,
+            path_conf,
+            path_v,
             residual=residual_rms,
-            reasons=traj_reasons,
+            reasons=path_reasons,
         ),
         _metric(
             "plane_angle_deg",
             f.plane_angle_deg,
             "deg",
             MetricKind.DERIVED,
-            clip_confidence(0.75 if (math.isfinite(plane_residual) and plane_residual < 0.08) else 0.45),
-            Validity.OK
-            if (math.isfinite(plane_residual) and plane_residual < 0.08)
-            else Validity.DEGRADED,
+            plane_conf,
+            plane_v,
             residual=plane_residual,
-            reasons=[]
-            if (math.isfinite(plane_residual) and plane_residual < 0.08)
-            else ["plane_residual_high"],
+            reasons=plane_reasons,
         ),
         _metric(
             "trajectory_radius_m",
@@ -383,21 +480,46 @@ def _build_inference_metrics(report: SwingReport) -> list[MetricEstimate]:
 
     out: list[MetricEstimate] = []
 
-    # Casting timing is a wrist-observable proxy (not clubface).
-    casting_v = Validity.OK
-    casting_conf = 0.7
-    if abs(feats.peak_omega_to_impact_s) > 0.25:
-        casting_v = Validity.DEGRADED
-        casting_conf = 0.4
+    casting_layer = _layer_from_meta(meta, "feature_quality", "casting")
+    if casting_layer:
+        casting_v = _validity_from_layer(casting_layer, Validity.DEGRADED)
+        casting_conf = clip_confidence(float(casting_layer.get("confidence", 0.4)))
+        casting_reasons = list(casting_layer.get("reasons") or ["casting_timing_proxy"])
+        casting_value = (
+            float("nan")
+            if casting_v == Validity.ABSTAIN
+            else feats.peak_omega_to_impact_s
+        )
+    else:
+        # Fallback: abstain when rigidity fail / impact unavailable.
+        casting_v = Validity.OK
+        casting_conf = 0.7
+        casting_reasons = ["casting_timing_proxy"]
+        casting_value = feats.peak_omega_to_impact_s
+        if abs(feats.peak_omega_to_impact_s) > 0.25:
+            casting_v = Validity.DEGRADED
+            casting_conf = 0.4
+        if float(meta.get("rigidity_fail", 0.0) or 0.0) > 0.5:
+            casting_v = Validity.ABSTAIN
+            casting_conf = 0.1
+            casting_reasons = ["casting_unobservable_rigidity_fail"]
+            casting_value = float("nan")
+        impact_mode = str(meta.get("impact_mode", "unknown"))
+        if commercial_impact_provenance(impact_mode) == IMPACT_PROVENANCE_ABSTAIN:
+            casting_v = Validity.ABSTAIN
+            casting_conf = 0.1
+            casting_reasons = ["casting_needs_impact"]
+            casting_value = float("nan")
+
     out.append(
         _metric(
             "casting_onset_s",
-            feats.peak_omega_to_impact_s,
+            casting_value,
             "s",
             MetricKind.PROXY,
             casting_conf,
             casting_v,
-            reasons=["casting_timing_proxy"],
+            reasons=casting_reasons,
         )
     )
     out.append(
@@ -520,6 +642,13 @@ def _build_inference_metrics(report: SwingReport) -> list[MetricEstimate]:
 def build_commercial_report(report: SwingReport) -> CommercialSwingReport:
     """Project a backward-compatible ``SwingReport`` into CommercialSwingReport v2."""
     meta = report.meta if isinstance(report.meta, dict) else {}
+    impact_mode = meta.get("impact_mode")
+    provenance = meta.get("impact_provenance") or commercial_impact_provenance(
+        str(impact_mode) if impact_mode is not None else "unknown"
+    )
+    ori_unc = meta.get("orientation_uncertainty")
+    truth_q = meta.get("truth_quality")
+    feat_q = meta.get("feature_quality")
     return CommercialSwingReport(
         version=CONTRACT_VERSION,
         truth=_build_truth_metrics(report),
@@ -544,7 +673,16 @@ def build_commercial_report(report: SwingReport) -> CommercialSwingReport:
         meta={
             "source_backend": meta.get("backend"),
             "device_id": meta.get("device_id"),
-            "impact_mode": meta.get("impact_mode"),
+            "impact_mode": impact_mode,
+            "impact_provenance": provenance,
+            "impact_provenance_values": [
+                IMPACT_PROVENANCE_COLLISION,
+                IMPACT_PROVENANCE_KINEMATIC,
+                IMPACT_PROVENANCE_ABSTAIN,
+            ],
+            "truth_quality": truth_q,
+            "feature_quality": feat_q,
+            "orientation_uncertainty": ori_unc,
             "swing_report_compatible": True,
         },
     )

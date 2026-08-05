@@ -160,7 +160,7 @@ def test_gates_detect_orientation_budget():
     }
     g = check_gates(payload)
     assert g["pass"] is False
-    assert any("8°" in v for v in g["violations"])
+    assert any("6°" in v for v in g["violations"])
 
 
 def test_evaluate_quick_dual_track():

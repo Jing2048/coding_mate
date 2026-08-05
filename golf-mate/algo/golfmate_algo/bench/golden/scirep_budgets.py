@@ -25,10 +25,20 @@ CAPTURE_FS_HZ = 200.0
 GYRO_RANGE_DEG_S = 2000.0
 ACCEL_RANGE_G = 16.0
 
-# Golf Mate product ambition on citeable cross_multibody (stricter than SciRep).
-PRODUCT_IMPACT_MS = 20.0
+# Golf Mate product ambition on citeable cross_multibody.
+# Baseline (sealed research run): impact ~5 ms, orientation ~2.2°, position ~12.0 cm.
+# Impact/orientation clear the tighter commercial ceilings; position is *slightly*
+# above 12 cm, so the hard product position budget stays SciRep-aligned at 17 cm
+# and 12 cm is tracked as an aspirational status (not a CI-breaking gate).
+PRODUCT_IMPACT_MS = 15.0
 PRODUCT_POSITION_CM = 17.0
-PRODUCT_ORIENTATION_DEG = 8.0
+PRODUCT_ORIENTATION_DEG = 6.0
+
+# Aspirational citeable trio (15 ms / 6° / 12 cm). Hard gates above already
+# enforce 15/6 where the baseline passes; position aspirational is informational.
+ASPIRATIONAL_IMPACT_MS = 15.0
+ASPIRATIONAL_ORIENTATION_DEG = 6.0
+ASPIRATIONAL_POSITION_CM = 12.0
 
 # Soft ceilings for the in-house optical-aligned protocol twin.
 # Twin includes casting / clip / lefty stress specs — ceilings are regression

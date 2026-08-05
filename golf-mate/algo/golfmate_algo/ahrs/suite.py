@@ -507,6 +507,7 @@ class GatedAdaptive(_EstimatorBase):
         self.gate_history: list[float] = []
         self.bias_history: list[ArrayF] = []
         self.rest_history: list[bool] = []
+        self.innovation_deg_history: list[float] = []
 
     def reset(self, q0: ArrayLike | None = None) -> None:
         super().reset(q0)
@@ -517,6 +518,7 @@ class GatedAdaptive(_EstimatorBase):
         self.gate_history = []
         self.bias_history = []
         self.rest_history = []
+        self.innovation_deg_history = []
 
     def update(self, gyro: ArrayLike, accel: ArrayLike, dt: float) -> ArrayF:
         from golfmate_algo.signal.dynamic_range import signed_log_compress
@@ -546,11 +548,23 @@ class GatedAdaptive(_EstimatorBase):
             if self.use_signed_log_tilt
             else accel_v
         )
+        # Tilt innovation (deg): angle between predicted up and accel-implied up.
+        innov_deg = float("nan")
+        a_hat = _unit_or_none(accel_tilt)
+        if a_hat is not None:
+            measured_up = so3.quat_to_rotmat(q_pred) @ a_hat
+            n = float(np.linalg.norm(measured_up))
+            if n > 1e-12:
+                cosang = float(
+                    np.clip(np.dot(measured_up / n, UP_WORLD), -1.0, 1.0)
+                )
+                innov_deg = float(np.degrees(np.arccos(cosang)))
         self.q = _apply_world_tilt_correction(q_pred, accel_tilt, alpha)
 
         self.gate_history.append(gate)
         self.bias_history.append(self.bias.copy())
         self.rest_history.append(bool(rest))
+        self.innovation_deg_history.append(innov_deg)
         return self.q.copy()
 
     def diagnostics(self) -> dict[str, Any]:
@@ -558,6 +572,7 @@ class GatedAdaptive(_EstimatorBase):
             "gate": np.asarray(self.gate_history, dtype=np.float64),
             "bias": np.asarray(self.bias_history, dtype=np.float64),
             "rest_mask": np.asarray(self.rest_history, dtype=bool),
+            "innovation_deg": np.asarray(self.innovation_deg_history, dtype=np.float64),
         }
 
 

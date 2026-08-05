@@ -12,6 +12,7 @@ swings (fixed centre) keep the rigid upper bound.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -203,6 +204,114 @@ def _fourier_center_from_residual(
     return gain * c, used
 
 
+def _detect_strap_slip(
+    quats: ArrayF,
+    gyro: ArrayF,
+    accel: ArrayF,
+    dt: float,
+    phases: SwingPhases,
+    L: ArrayF,
+) -> dict[str, float]:
+    """Early vs late lever consistency — strap slip rotates/translates L mid-swing."""
+    n = quats.shape[0]
+    addr = int(np.clip(phases.address_idx, 0, n - 1))
+    fin = int(np.clip(phases.finish_idx, 0, n - 1))
+    if fin - addr < 24:
+        return {
+            "strap_slip_score": 0.0,
+            "strap_slip_detected": 0.0,
+            "lever_angle_delta_deg": 0.0,
+            "radius_ratio": 1.0,
+        }
+    mid = addr + (fin - addr) // 2
+    try:
+        early = estimate_lever_arm(
+            quats, gyro, accel, dt, active_slice=(addr, mid + 1)
+        )
+        late = estimate_lever_arm(
+            quats, gyro, accel, dt, active_slice=(mid, fin + 1)
+        )
+    except (ValueError, np.linalg.LinAlgError):
+        return {
+            "strap_slip_score": 0.0,
+            "strap_slip_detected": 0.0,
+            "lever_angle_delta_deg": 0.0,
+            "radius_ratio": 1.0,
+        }
+    Le = early.lever_arm_body
+    Ll = late.lever_arm_body
+    ne = float(np.linalg.norm(Le)) + 1e-12
+    nl = float(np.linalg.norm(Ll)) + 1e-12
+    cosang = float(np.clip(np.dot(Le, Ll) / (ne * nl), -1.0, 1.0))
+    ang_deg = float(np.degrees(np.arccos(cosang)))
+    ratio = float(max(ne, nl) / min(ne, nl))
+    # Score in [0,1]: angle>~25° or radius ratio>~1.35 is suspicious.
+    score_ang = float(np.clip((ang_deg - 12.0) / 30.0, 0.0, 1.0))
+    score_r = float(np.clip((ratio - 1.15) / 0.5, 0.0, 1.0))
+    # Also compare each half to the full-swing L.
+    nL = float(np.linalg.norm(L)) + 1e-12
+    cos_e = float(np.clip(np.dot(Le, L) / (ne * nL), -1.0, 1.0))
+    cos_l = float(np.clip(np.dot(Ll, L) / (nl * nL), -1.0, 1.0))
+    ang_full = max(
+        float(np.degrees(np.arccos(cos_e))),
+        float(np.degrees(np.arccos(cos_l))),
+    )
+    score_full = float(np.clip((ang_full - 15.0) / 30.0, 0.0, 1.0))
+    score = float(np.clip(max(score_ang, score_r, score_full), 0.0, 1.0))
+    # Require both angular change and that both halves had usable rank.
+    usable = int(early.rank) >= 2 and int(late.rank) >= 2
+    detected = float(1.0 if (usable and score >= 0.55) else 0.0)
+    return {
+        "strap_slip_score": score,
+        "strap_slip_detected": detected,
+        "lever_angle_delta_deg": ang_deg,
+        "radius_ratio": ratio,
+        "strap_slip_early_rank": float(early.rank),
+        "strap_slip_late_rank": float(late.rank),
+    }
+
+
+def _apply_lever_prior(
+    L: ArrayF,
+    *,
+    lever_prior_body: ArrayF | None,
+    lever_prior_radius_m: float | None,
+    rank: int,
+    resid_rms: float,
+) -> tuple[ArrayF, dict[str, float]]:
+    """Optional personal lever/arm prior — soft blend; never worsens strong LS."""
+    meta: dict[str, float] = {
+        "lever_prior_applied": 0.0,
+        "lever_prior_weight": 0.0,
+        "lever_prior_radius_m": float("nan"),
+    }
+    prior: ArrayF | None = None
+    if lever_prior_body is not None:
+        prior = np.asarray(lever_prior_body, dtype=np.float64).reshape(3).copy()
+    elif lever_prior_radius_m is not None and math.isfinite(float(lever_prior_radius_m)):
+        r_prior = float(lever_prior_radius_m)
+        if r_prior > 0.05:
+            u = L / (float(np.linalg.norm(L)) + 1e-12)
+            prior = (r_prior * u).astype(np.float64)
+    if prior is None:
+        return L, meta
+    r_p = float(np.linalg.norm(prior))
+    meta["lever_prior_radius_m"] = r_p
+    # Strong LS (rank≥2, modest residual, plausible radius): light prior only.
+    r_ls = float(np.linalg.norm(L))
+    strong = rank >= 2 and resid_rms < 12.0 and 0.2 <= r_ls <= 1.4
+    if strong:
+        w = 0.15
+    elif rank < 2 or resid_rms >= 18.0 or r_ls < 0.15 or r_ls > 1.6:
+        w = 0.85
+    else:
+        w = 0.40
+    L_out = ((1.0 - w) * L + w * prior).astype(np.float64)
+    meta["lever_prior_applied"] = 1.0
+    meta["lever_prior_weight"] = float(w)
+    return L_out, meta
+
+
 def estimate_hybrid_trajectory(
     quats: ArrayLike,
     gyro: ArrayLike,
@@ -216,6 +325,9 @@ def estimate_hybrid_trajectory(
     constrained_blend: float = 0.40,
     plane_blend: float = 0.15,
     max_residual_m_s2: float = 25.0,
+    lever_prior_body: ArrayLike | None = None,
+    lever_prior_radius_m: float | None = None,
+    enable_strap_slip_detect: bool = True,
 ) -> HybridTrajectoryResult:
     """Hybrid wrist trajectory reconstruction matching the pipeline contract.
 
@@ -225,6 +337,10 @@ def estimate_hybrid_trajectory(
     * Finish-on-circle soft closure (project FIN residual onto virtual circle)
     * Rigidity-failure flagged in meta (club-mount casting) without DR replace —
       pure DR under consumer noise often exceeds broken-lever error
+
+    Optional commercial inputs (backward compatible defaults):
+    * ``lever_prior_body`` / ``lever_prior_radius_m`` — personal lever/arm prior
+    * ``enable_strap_slip_detect`` — early/late lever consistency indicator
     """
     quats = np.asarray(quats, dtype=np.float64).reshape(-1, 4)
     gyro = np.asarray(gyro, dtype=np.float64).reshape(-1, 3)
@@ -261,6 +377,30 @@ def estimate_hybrid_trajectory(
     L = rigid.lever_arm_body.copy()
     resid_rms = float(rigid.residual_rms_m_s2)
     rank = int(rigid.rank)
+
+    prior_meta: dict[str, float] = {}
+    L, prior_meta = _apply_lever_prior(
+        L,
+        lever_prior_body=(
+            np.asarray(lever_prior_body, dtype=np.float64).reshape(3)
+            if lever_prior_body is not None
+            else None
+        ),
+        lever_prior_radius_m=lever_prior_radius_m,
+        rank=rank,
+        resid_rms=resid_rms,
+    )
+
+    strap_meta = (
+        _detect_strap_slip(quats, gyro, accel, dt, phases, L)
+        if enable_strap_slip_detect
+        else {
+            "strap_slip_score": 0.0,
+            "strap_slip_detected": 0.0,
+            "lever_angle_delta_deg": 0.0,
+            "radius_ratio": 1.0,
+        }
+    )
 
     pos_rel = np.zeros((n, 3), dtype=np.float64)
     vel_kin = np.zeros((n, 3), dtype=np.float64)
@@ -339,6 +479,8 @@ def estimate_hybrid_trajectory(
                 "active_slice_top": float(top),
                 "active_slice_imp": float(imp),
                 "active_slice_fin": float(fin),
+                **prior_meta,
+                **strap_meta,
             },
         )
 
@@ -464,6 +606,8 @@ def estimate_hybrid_trajectory(
             "active_slice_top": float(top),
             "active_slice_imp": float(imp),
             "active_slice_fin": float(fin),
+            **prior_meta,
+            **strap_meta,
         },
     )
 

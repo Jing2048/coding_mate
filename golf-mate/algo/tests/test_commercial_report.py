@@ -157,6 +157,19 @@ def test_abstained_metrics_are_strict_json_null_not_nan():
     json.dumps(payload, allow_nan=False)
 
 
+def test_nonfinite_available_metric_is_forced_to_abstain():
+    syn = planar_circular_swing()
+    report = analyze_swing(syn.packet, prefer_vqf=False, compare_to_ideal=False)
+    report.features.extras.pop("x_factor_proxy_deg", None)
+    report.meta["biomech_proxies"] = {}
+    payload = export_commercial_report(report)
+    metric = next(m for m in payload["inference"] if m["name"] == "x_factor_proxy_deg")
+    assert metric["validity"] == "abstain"
+    assert metric["value"] is None
+    assert "value_unavailable" in metric["reasons"]
+    validate_commercial_report_dict(payload)
+
+
 def test_commercial_report_preserves_swing_report():
     syn = planar_circular_swing()
     report = analyze_swing(syn.packet, prefer_vqf=False, compare_to_ideal=False)

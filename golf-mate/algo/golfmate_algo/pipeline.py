@@ -39,6 +39,8 @@ def analyze_swing(
     use_dual_path: bool = True,
     compare_to_ideal: bool = True,
     use_offline_smooth: bool = False,
+    lever_prior_body: list[float] | tuple[float, ...] | None = None,
+    lever_prior_radius_m: float | None = None,
 ) -> SwingReport:
     """Run the full analysis pipeline.
 
@@ -50,6 +52,8 @@ def analyze_swing(
     impact_hint_s :
         Optional collision timestamp from a higher-rate synchronized stream
         (Apple Watch 800 Hz accelerometer). Other phases remain 200 Hz-derived.
+    lever_prior_body / lever_prior_radius_m :
+        Optional personal lever/arm prior for hybrid trajectory (commercial).
 
     The packet is first passed through ``normalize_packet`` so Watch / glove /
     left-handed streams share one canonical lead-right anatomical frame.
@@ -184,7 +188,14 @@ def analyze_swing(
         peak_w = float(seg_diag.quality.get("peak_omega_rad_s", 0.0))
         hy_kw = pro_hybrid_params(peak_w)
         hy = estimate_hybrid_trajectory(
-            quats, gyro_c, accel_raw, dt, phases, **hy_kw
+            quats,
+            gyro_c,
+            accel_raw,
+            dt,
+            phases,
+            lever_prior_body=lever_prior_body,
+            lever_prior_radius_m=lever_prior_radius_m,
+            **hy_kw,
         )
         pos, vel = hy.positions, hy.velocities
         traj_meta = {
@@ -306,6 +317,51 @@ def analyze_swing(
             },
         }
 
+    from golfmate_algo.quality.orientation_uncertainty import (
+        estimate_orientation_uncertainty,
+    )
+    from golfmate_algo.quality.truth_quality import (
+        commercial_impact_provenance,
+        evaluate_truth_quality,
+        feature_quality_from_truth,
+    )
+
+    ori_unc = estimate_orientation_uncertainty(
+        gate=ahrs_diag.get("gate"),
+        bias=ahrs_diag.get("bias"),
+        innovation_deg=ahrs_diag.get("innovation_deg"),
+        rest_mask=ahrs_diag.get("rest_mask"),
+        n=quats.shape[0],
+    )
+    truth_q = evaluate_truth_quality(
+        impact_mode=str(seg_diag.impact_mode),
+        impact_confidence=float(seg_diag.impact_confidence),
+        impact_method=str(seg_diag.method),
+        radius_m=float(traj_meta.get("radius_m", float("nan"))),
+        residual_rms=float(traj_meta.get("residual_rms_m_s2", float("nan"))),
+        rank=float(traj_meta.get("rank", float("nan"))),
+        fallback=float(traj_meta.get("fallback", 0.0)),
+        traj_valid=traj_meta.get("valid"),
+        strap_slip_score=float(traj_meta.get("strap_slip_score", 0.0)),
+        strap_slip_detected=float(traj_meta.get("strap_slip_detected", 0.0)),
+        lever_angle_delta_deg=float(traj_meta.get("lever_angle_delta_deg", 0.0)),
+        radius_ratio=float(traj_meta.get("radius_ratio", 1.0)),
+        gate=ahrs_diag.get("gate"),
+        bias=ahrs_diag.get("bias"),
+        innovation_deg=ahrs_diag.get("innovation_deg"),
+        rest_mask=ahrs_diag.get("rest_mask"),
+        gyro=gyro_c,
+        accel=accel_raw,
+        t=packet.t,
+    )
+    feat_q = feature_quality_from_truth(
+        truth=truth_q,
+        peak_omega_rad_s=float(features.peak_omega_rad_s),
+        plane_residual_rms=float(traj_meta.get("plane_residual_rms", float("nan"))),
+        channel_kind=channel_kind,
+        rigidity_fail=float(traj_meta.get("rigidity_fail", 0.0)),
+    )
+
     return SwingReport(
         phases=phases,
         features=features,
@@ -336,12 +392,18 @@ def analyze_swing(
             "pro_swing": pro_dict,
             "high_order": high_dict,
             "impact_mode": seg_diag.impact_mode,
+            "impact_provenance": commercial_impact_provenance(seg_diag.impact_mode),
             "impact_confidence": float(seg_diag.impact_confidence),
             "impact_method": seg_diag.method,
             "coarse_impact_mode": seg_coarse.impact_mode,
+            "truth_quality": truth_q.as_dict(),
+            "feature_quality": {k: v.as_dict() for k, v in feat_q.items()},
+            "orientation_uncertainty": ori_unc.summary_only(),
+            "orientation_uncertainty_sigma_deg": ori_unc.sigma_deg.tolist(),
             **ref_meta,
             "fs_hz": fs,
             "device_id": packet.frame.device_id,
+            "channel_kind": channel_kind,
             "frame": {
                 "handedness": packet.frame.handedness.value,
                 "wrist": packet.frame.wrist.value,

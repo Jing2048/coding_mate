@@ -29,6 +29,8 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
     # --- cross multibody: beyond-consumer budgets on citeable track ---
     # Consumer-grade literature budgets were ~40 ms / ~18 cm; we require tighter
     # than that on the independent multibody generator (product ambition).
+    # Hard product ceilings: impact ≤15 ms, orientation ≤6°, position ≤17 cm.
+    # Aspirational 12 cm position is reported separately (baseline ~12.0 cm).
     cross = by.get("cross_multibody", {})
     e2e_pos = _mean(cross, "e2e", "consumer_wrist", "position_cm")
     if e2e_pos is None:
@@ -43,37 +45,101 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
         if _mean(cross, "e2e", "consumer_wrist", "position_cm") is not None
         else "consumer"
     )
-    if e2e_pos is not None and e2e_pos > 17.0:
+    pos_budget = float(scirep_budgets.PRODUCT_POSITION_CM)
+    if e2e_pos is not None and e2e_pos > pos_budget:
         violations.append(
-            f"cross_multibody position MAE {e2e_pos:.1f} cm exceeds 17 cm "
+            f"cross_multibody position MAE {e2e_pos:.1f} cm exceeds {pos_budget:.0f} cm "
             f"beyond-consumer budget ({pos_src})"
         )
     elif e2e_pos is not None:
         notes.append(
-            f"cross_multibody position MAE {e2e_pos:.2f} cm (budget 17, {pos_src})"
+            f"cross_multibody position MAE {e2e_pos:.2f} cm "
+            f"(budget {pos_budget:.0f}, {pos_src})"
         )
 
     impact = _mean(cross, "events", "impact", "consumer_wrist")
     if impact is None:
         impact = _mean(cross, "events", "impact", "consumer")
-    if impact is not None and impact > 20.0:
+    impact_budget = float(scirep_budgets.PRODUCT_IMPACT_MS)
+    if impact is not None and impact > impact_budget:
         violations.append(
-            f"cross_multibody impact MAE {impact:.1f} ms exceeds 20 ms "
+            f"cross_multibody impact MAE {impact:.1f} ms exceeds {impact_budget:.0f} ms "
             f"beyond-consumer budget"
         )
     elif impact is not None:
-        notes.append(f"cross_multibody impact MAE {impact:.2f} ms (budget 20)")
+        notes.append(
+            f"cross_multibody impact MAE {impact:.2f} ms (budget {impact_budget:.0f})"
+        )
 
     e2e_ori = _mean(cross, "e2e", "consumer_wrist", "orientation_deg")
     if e2e_ori is None:
         e2e_ori = _mean(cross, "e2e", "consumer", "orientation_deg")
-    if e2e_ori is not None and e2e_ori > 8.0:
+    ori_budget = float(scirep_budgets.PRODUCT_ORIENTATION_DEG)
+    if e2e_ori is not None and e2e_ori > ori_budget:
         violations.append(
-            f"cross_multibody orientation MAE {e2e_ori:.1f}° exceeds 8° "
+            f"cross_multibody orientation MAE {e2e_ori:.1f}° exceeds {ori_budget:.0f}° "
             f"beyond-consumer budget"
         )
     elif e2e_ori is not None:
-        notes.append(f"cross_multibody orientation MAE {e2e_ori:.2f}° (budget 8)")
+        notes.append(
+            f"cross_multibody orientation MAE {e2e_ori:.2f}° (budget {ori_budget:.0f})"
+        )
+
+    # --- aspirational 15 ms / 6° / 12 cm (informational; does not fail CI) ---
+    asp_budgets = {
+        "impact_ms": float(scirep_budgets.ASPIRATIONAL_IMPACT_MS),
+        "orientation_deg": float(scirep_budgets.ASPIRATIONAL_ORIENTATION_DEG),
+        "position_cm": float(scirep_budgets.ASPIRATIONAL_POSITION_CM),
+    }
+    asp_status: dict[str, Any] = {}
+    asp_notes: list[str] = []
+    asp_fail: list[str] = []
+    if impact is not None:
+        ok = impact <= asp_budgets["impact_ms"]
+        asp_status["impact_ms"] = {
+            "value": impact,
+            "budget": asp_budgets["impact_ms"],
+            "pass": ok,
+        }
+        (asp_notes if ok else asp_fail).append(
+            f"aspirational impact {impact:.2f} ms "
+            f"(budget {asp_budgets['impact_ms']:.0f})"
+        )
+    if e2e_ori is not None:
+        ok = e2e_ori <= asp_budgets["orientation_deg"]
+        asp_status["orientation_deg"] = {
+            "value": e2e_ori,
+            "budget": asp_budgets["orientation_deg"],
+            "pass": ok,
+        }
+        (asp_notes if ok else asp_fail).append(
+            f"aspirational orientation {e2e_ori:.2f}° "
+            f"(budget {asp_budgets['orientation_deg']:.0f})"
+        )
+    if e2e_pos is not None:
+        ok = e2e_pos <= asp_budgets["position_cm"]
+        asp_status["position_cm"] = {
+            "value": e2e_pos,
+            "budget": asp_budgets["position_cm"],
+            "pass": ok,
+        }
+        (asp_notes if ok else asp_fail).append(
+            f"aspirational position {e2e_pos:.2f} cm "
+            f"(budget {asp_budgets['position_cm']:.0f}, {pos_src})"
+        )
+    aspirational = {
+        "pass": len(asp_fail) == 0 and bool(asp_status),
+        "budgets": asp_budgets,
+        "status": asp_status,
+        "notes": asp_notes,
+        "failures": asp_fail,
+    }
+    if asp_fail:
+        notes.append(
+            "aspirational 15ms/6deg/12cm not met: " + "; ".join(asp_fail)
+        )
+    elif asp_status:
+        notes.append("aspirational 15ms/6deg/12cm met")
 
     # --- session: gated must crush gyro_only on analytic or multibody session ---
     session = payload.get("session", {})
@@ -258,7 +324,7 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
 
     # --- robust golden tracks (regression ceilings — harder than isomorphic,
     # looser than citeable cross_multibody consumer product gates) ---
-    for track, impact_budget, pos_budget, ori_budget in (
+    for track, impact_budget, pos_budget_t, ori_budget_t in (
         ("pro_regime", 40.0, 35.0, 40.0),
         ("casting_pathology", 50.0, 120.0, 40.0),
         ("fs_stress", 150.0, 40.0, 20.0),
@@ -277,18 +343,18 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
             violations.append(
                 f"{track} impact MAE {imp:.1f} ms exceeds {impact_budget:.0f} ms budget"
             )
-        if pos is not None and pos > pos_budget:
+        if pos is not None and pos > pos_budget_t:
             violations.append(
-                f"{track} position MAE {pos:.1f} cm exceeds {pos_budget:.0f} cm budget"
+                f"{track} position MAE {pos:.1f} cm exceeds {pos_budget_t:.0f} cm budget"
             )
-        if ori is not None and ori > ori_budget:
+        if ori is not None and ori > ori_budget_t:
             violations.append(
-                f"{track} orientation MAE {ori:.1f}° exceeds {ori_budget:.0f}° budget"
+                f"{track} orientation MAE {ori:.1f}° exceeds {ori_budget_t:.0f}° budget"
             )
         if imp is not None or pos is not None or ori is not None:
             notes.append(
                 f"{track}: ori={ori}, impact={imp}, pos={pos} "
-                f"(budgets {ori_budget}/{impact_budget}/{pos_budget})"
+                f"(budgets {ori_budget_t}/{impact_budget}/{pos_budget_t})"
             )
 
     clip = by.get("clip_stress", {})
@@ -318,4 +384,5 @@ def check_gates(payload: dict[str, Any]) -> dict[str, Any]:
         "pass": len(violations) == 0,
         "violations": violations,
         "notes": notes,
+        "aspirational": aspirational,
     }
