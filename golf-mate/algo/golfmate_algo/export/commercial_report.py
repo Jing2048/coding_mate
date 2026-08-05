@@ -2,7 +2,9 @@
 
 Truth / inference metrics are populated from an existing ``SwingReport``.
 Personal baseline, practice-loop, and strategy sections are stable serializable
-placeholders (``implemented=False``); the personal engine is not wired yet.
+contracts. Optional ``prior`` / session / context args populate them with
+``implemented=True``; without those args the sections remain placeholders
+(``implemented=False``) preserving prior call behaviour.
 
 Does not mutate ``SwingReport`` — export-only layer for commercial consumers.
 """
@@ -13,8 +15,22 @@ import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
+from golfmate_algo.personal_biomech.context import SwingContext
+from golfmate_algo.personal_biomech.practice import (
+    PracticeLoopFeatures,
+    build_practice_loop_features,
+)
+from golfmate_algo.personal_biomech.prior import (
+    PersonalBiomechPrior,
+    PersonalScore,
+    score_against_prior,
+)
+from golfmate_algo.personal_biomech.strategy import (
+    StrategyFeatures,
+    build_strategy_features,
+)
 from golfmate_algo.quality.uncertainty import (
     REQUIRED_METRIC_KEYS,
     MetricEstimate,
@@ -72,6 +88,8 @@ PRACTICE_LOOP_FIELD_NAMES: tuple[str, ...] = (
     "in_window",
     "correction_direction",
     "session_consistency",
+    "error_sign",
+    "suggested_cue",
 )
 
 STRATEGY_FIELD_NAMES: tuple[str, ...] = (
@@ -79,6 +97,7 @@ STRATEGY_FIELD_NAMES: tuple[str, ...] = (
     "dispersion",
     "miss_bias",
     "consistency_decay",
+    "bad_streak",
 )
 
 
@@ -102,7 +121,7 @@ def _finding_as_dict(f: DiagnosticFinding) -> dict[str, Any]:
 
 @dataclass
 class PersonalBaselineSection:
-    """Relative-to-self signed errors — placeholder until personal engine ships."""
+    """Relative-to-self signed errors vs personal (preferred) or tour baseline."""
 
     version: str = PERSONAL_BASELINE_VERSION
     implemented: bool = False
@@ -112,7 +131,7 @@ class PersonalBaselineSection:
     def as_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
-            "implemented": self.implemented,
+            "implemented": bool(self.implemented),
             "deltas": [m.as_dict() for m in self.deltas],
             "meta": dict(self.meta),
         }
@@ -120,7 +139,7 @@ class PersonalBaselineSection:
 
 @dataclass
 class PracticeLoopSection:
-    """practice-loop-v1 feature contract (schema frozen; engine not implemented)."""
+    """practice-loop-v1 feature contract."""
 
     version: str = PRACTICE_LOOP_VERSION
     implemented: bool = False
@@ -128,17 +147,21 @@ class PracticeLoopSection:
     in_window: bool | None = None
     correction_direction: float | None = None
     session_consistency: float | None = None
+    error_sign: float | None = None
+    suggested_cue: str | None = None
     metrics: list[MetricEstimate] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
-            "implemented": self.implemented,
+            "implemented": bool(self.implemented),
             "focus_kpi": self.focus_kpi,
             "in_window": self.in_window,
             "correction_direction": self.correction_direction,
             "session_consistency": self.session_consistency,
+            "error_sign": self.error_sign,
+            "suggested_cue": self.suggested_cue,
             "metrics": [m.as_dict() for m in self.metrics],
             "meta": dict(self.meta),
         }
@@ -146,7 +169,7 @@ class PracticeLoopSection:
 
 @dataclass
 class StrategySection:
-    """strategy-v1 feature contract (schema frozen; engine not implemented)."""
+    """strategy-v1 feature contract (not strokes gained)."""
 
     version: str = STRATEGY_VERSION
     implemented: bool = False
@@ -154,17 +177,19 @@ class StrategySection:
     dispersion: float | None = None
     miss_bias: float | None = None
     consistency_decay: float | None = None
+    bad_streak: int | None = None
     metrics: list[MetricEstimate] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
-            "implemented": self.implemented,
+            "implemented": bool(self.implemented),
             "tempo_under_pressure": self.tempo_under_pressure,
             "dispersion": self.dispersion,
             "miss_bias": self.miss_bias,
             "consistency_decay": self.consistency_decay,
+            "bad_streak": self.bad_streak,
             "metrics": [m.as_dict() for m in self.metrics],
             "meta": dict(self.meta),
         }
@@ -177,7 +202,7 @@ class CommercialSwingReport:
     Sections:
       * truth — measured/derived citeable P0 wrist/timing metrics
       * inference — proxy + inferred high-order metrics
-      * personal_baseline / practice_loop / strategy — stable placeholders
+      * personal_baseline / practice_loop / strategy — optional personal engine
     """
 
     version: str
@@ -719,8 +744,33 @@ def _build_inference_metrics(report: SwingReport) -> list[MetricEstimate]:
     return out
 
 
-def build_commercial_report(report: SwingReport) -> CommercialSwingReport:
-    """Project a backward-compatible ``SwingReport`` into CommercialSwingReport v2."""
+def build_commercial_report(
+    report: SwingReport,
+    *,
+    prior: PersonalBiomechPrior | None = None,
+    session_scores: Sequence[PersonalScore] | None = None,
+    context: SwingContext | None = None,
+    focus_metric: str | None = None,
+    strategy_reports: Sequence[Any] | None = None,
+    strategy_contexts: Sequence[SwingContext | None] | None = None,
+    strategy_features: StrategyFeatures | None = None,
+    practice_features: PracticeLoopFeatures | None = None,
+    personal_score: PersonalScore | None = None,
+) -> CommercialSwingReport:
+    """Project a backward-compatible ``SwingReport`` into CommercialSwingReport v2.
+
+    Optional personal-engine args:
+      * ``prior`` — when provided, personal_baseline + practice_loop become
+        ``implemented=True`` (practice can also run on tour fallback alone if
+        ``practice_features`` is passed explicitly).
+      * ``session_scores`` — recent PersonalScore history for session consistency.
+      * ``context`` / ``strategy_reports`` / ``strategy_contexts`` — strategy-v1.
+      * ``strategy_features`` / ``practice_features`` / ``personal_score`` —
+        precomputed overrides.
+
+    Calling ``build_commercial_report(report)`` with no extras preserves the
+    historical placeholder behaviour (``implemented=False``).
+    """
     meta = report.meta if isinstance(report.meta, dict) else {}
     impact_mode = meta.get("impact_mode")
     provenance = meta.get("impact_provenance") or commercial_impact_provenance(
@@ -729,25 +779,27 @@ def build_commercial_report(report: SwingReport) -> CommercialSwingReport:
     ori_unc = meta.get("orientation_uncertainty")
     truth_q = meta.get("truth_quality")
     feat_q = meta.get("feature_quality")
+
+    personal_section, practice_section, strategy_section = _build_personal_sections(
+        report,
+        prior=prior,
+        session_scores=session_scores,
+        context=context,
+        focus_metric=focus_metric,
+        strategy_reports=strategy_reports,
+        strategy_contexts=strategy_contexts,
+        strategy_features=strategy_features,
+        practice_features=practice_features,
+        personal_score=personal_score,
+    )
+
     return CommercialSwingReport(
         version=CONTRACT_VERSION,
         truth=_build_truth_metrics(report),
         inference=_build_inference_metrics(report),
-        personal_baseline=PersonalBaselineSection(
-            meta={"note": "personal biomech prior not implemented in this release"},
-        ),
-        practice_loop=PracticeLoopSection(
-            meta={
-                "note": "practice-loop-v1 schema frozen; personal engine not wired",
-                "fields": list(PRACTICE_LOOP_FIELD_NAMES),
-            },
-        ),
-        strategy=StrategySection(
-            meta={
-                "note": "strategy-v1 schema frozen; personal engine not wired",
-                "fields": list(STRATEGY_FIELD_NAMES),
-            },
-        ),
+        personal_baseline=personal_section,
+        practice_loop=practice_section,
+        strategy=strategy_section,
         findings=list(report.findings),
         phases=report.phases.as_dict(),
         meta={
@@ -764,13 +816,115 @@ def build_commercial_report(report: SwingReport) -> CommercialSwingReport:
             "feature_quality": feat_q,
             "orientation_uncertainty": ori_unc,
             "swing_report_compatible": True,
+            "context": context.as_dict() if context is not None else None,
         },
     )
 
 
-def export_commercial_report(report: SwingReport) -> dict[str, Any]:
+def _build_personal_sections(
+    report: SwingReport,
+    *,
+    prior: PersonalBiomechPrior | None,
+    session_scores: Sequence[PersonalScore] | None,
+    context: SwingContext | None,
+    focus_metric: str | None,
+    strategy_reports: Sequence[Any] | None,
+    strategy_contexts: Sequence[SwingContext | None] | None,
+    strategy_features: StrategyFeatures | None,
+    practice_features: PracticeLoopFeatures | None,
+    personal_score: PersonalScore | None,
+) -> tuple[PersonalBaselineSection, PracticeLoopSection, StrategySection]:
+    # Default placeholders — preserve old call behaviour.
+    personal_section = PersonalBaselineSection(
+        meta={"note": "personal biomech prior not provided"},
+    )
+    practice_section = PracticeLoopSection(
+        meta={
+            "note": "practice-loop-v1 not computed; pass prior or practice_features",
+            "fields": list(PRACTICE_LOOP_FIELD_NAMES),
+        },
+    )
+    strategy_section = StrategySection(
+        meta={
+            "note": "strategy-v1 not computed; pass strategy_reports/features",
+            "fields": list(STRATEGY_FIELD_NAMES),
+            "not_strokes_gained": True,
+        },
+    )
+
+    score = personal_score
+    if prior is not None or personal_score is not None:
+        score = personal_score or score_against_prior(report, prior)
+        personal_section = PersonalBaselineSection(
+            version=PERSONAL_BASELINE_VERSION,
+            implemented=True,
+            deltas=score.deltas(),
+            meta={
+                "prior_n_swings": int(prior.n_swings) if prior is not None else 0,
+                "prefer_personal": True,
+                "score_meta": dict(score.meta),
+            },
+        )
+
+    if practice_features is not None or prior is not None or personal_score is not None:
+        pl = practice_features or build_practice_loop_features(
+            report,
+            prior,
+            focus_metric=focus_metric,
+            session_scores=session_scores,
+            personal_score=score,
+        )
+        practice_section = PracticeLoopSection(
+            version=pl.version,
+            implemented=True,
+            focus_kpi=pl.focus_metric,
+            in_window=pl.in_window,
+            correction_direction=pl.correction_direction,
+            session_consistency=pl.session_consistency,
+            error_sign=pl.error_sign,
+            suggested_cue=pl.suggested_cue,
+            metrics=list(pl.metrics),
+            meta={
+                "fields": list(PRACTICE_LOOP_FIELD_NAMES),
+                "reasons": list(pl.reasons),
+                **dict(pl.meta),
+            },
+        )
+
+    if strategy_features is not None or strategy_reports is not None:
+        sf = strategy_features
+        if sf is None:
+            seq = list(strategy_reports or [])
+            ctxs = strategy_contexts
+            if ctxs is None and context is not None and len(seq) == 1:
+                ctxs = [context]
+            sf = build_strategy_features(seq, ctxs, prior=prior)
+        strategy_section = StrategySection(
+            version=sf.version,
+            implemented=bool(sf.implemented),
+            tempo_under_pressure=sf.tempo_under_pressure,
+            dispersion=sf.dispersion,
+            miss_bias=sf.miss_bias,
+            consistency_decay=sf.consistency_decay,
+            bad_streak=sf.bad_streak,
+            metrics=list(sf.metrics),
+            meta={
+                "fields": list(STRATEGY_FIELD_NAMES),
+                "not_strokes_gained": True,
+                "reasons": list(sf.reasons),
+                **dict(sf.meta),
+            },
+        )
+
+    return personal_section, practice_section, strategy_section
+
+
+def export_commercial_report(
+    report: SwingReport,
+    **kwargs: Any,
+) -> dict[str, Any]:
     """Serialize CommercialSwingReport v2 as a JSON-ready dict."""
-    return build_commercial_report(report).as_dict()
+    return build_commercial_report(report, **kwargs).as_dict()
 
 
 def validate_commercial_report_dict(d: dict[str, Any]) -> None:
@@ -786,18 +940,24 @@ def validate_commercial_report_dict(d: dict[str, Any]) -> None:
     pb = d.get("personal_baseline") or {}
     if pb.get("version") != PERSONAL_BASELINE_VERSION:
         raise ValueError("personal_baseline.version mismatch")
-    if pb.get("implemented") is not False:
-        raise ValueError("personal_baseline.implemented must be False until engine ships")
+    if not isinstance(pb.get("implemented"), bool):
+        raise ValueError("personal_baseline.implemented must be bool")
+    for m in pb.get("deltas") or []:
+        validate_metric_dict(m)
     pl = d.get("practice_loop") or {}
     if pl.get("version") != PRACTICE_LOOP_VERSION:
         raise ValueError("practice_loop.version mismatch")
-    if pl.get("implemented") is not False:
-        raise ValueError("practice_loop.implemented must be False until engine ships")
+    if not isinstance(pl.get("implemented"), bool):
+        raise ValueError("practice_loop.implemented must be bool")
+    for m in pl.get("metrics") or []:
+        validate_metric_dict(m)
     st = d.get("strategy") or {}
     if st.get("version") != STRATEGY_VERSION:
         raise ValueError("strategy.version mismatch")
-    if st.get("implemented") is not False:
-        raise ValueError("strategy.implemented must be False until engine ships")
+    if not isinstance(st.get("implemented"), bool):
+        raise ValueError("strategy.implemented must be bool")
+    for m in st.get("metrics") or []:
+        validate_metric_dict(m)
     for f in d.get("findings") or []:
         if not isinstance(f, dict):
             raise ValueError("finding must be a dict")
@@ -827,6 +987,8 @@ __all__ = [
     "PersonalBaselineSection",
     "PracticeLoopSection",
     "StrategySection",
+    "SwingContext",
+    "PersonalBiomechPrior",
     "build_commercial_report",
     "export_commercial_report",
     "load_commercial_schema",

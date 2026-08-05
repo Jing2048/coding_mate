@@ -36,6 +36,7 @@ golfmate_algo = [
   "devices/*.md",
   "reference/*.json",
   "model/*.json",
+  "personal_biomech/schemas/*.json",
 ]
 
 [tool.pytest.ini_options]

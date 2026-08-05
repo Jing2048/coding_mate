@@ -1,0 +1,42 @@
+{
+  "version": "strategy-v1",
+  "description": "Round/practice strategy precursor features. Explicitly not strokes gained. Missing context abstains fields. Club-stratified when club_id present.",
+  "fields": [
+    "tempo_under_pressure",
+    "dispersion",
+    "miss_bias",
+    "consistency_decay",
+    "bad_streak"
+  ],
+  "rules": {
+    "not_strokes_gained": true,
+    "club_stratification": "When club_id exists, compute within-club then robustly aggregate valid club cohorts. Never compare pressure of one club to calm of another. Without club_id, use explicit 'all' cohort with reason club_context_missing and degraded validity.",
+    "tempo_under_pressure": "Within club: median(tempo|pressure) - median(tempo|calm); aggregate = median of valid club deltas",
+    "dispersion": "Biomechanics z-dispersion: robust MAD of absolute personal |z| across core metrics (NOT ball/shot lateral dispersion). Canonical metric name biomech_z_dispersion; field 'dispersion' is an alias.",
+    "miss_bias": "Within club median signed miss_direction when outcome/miss context exists; aggregate median of valid club medians; else abstain. by_club summaries in meta.",
+    "consistency_decay": "Within club: late_half median mean_|z| minus early_half; aggregate median of valid club decays; by_club in meta",
+    "bad_streak": "Within club: trailing swings with mean_|z| >= 2.0; aggregate median across clubs"
+  },
+  "dispersion": {
+    "kind": "biomechanics_z_dispersion",
+    "canonical_name": "biomech_z_dispersion",
+    "field_alias": "dispersion",
+    "not_ball_dispersion": true
+  },
+  "context_fields": [
+    "setting",
+    "pressure",
+    "club_id",
+    "miss_direction",
+    "outcome"
+  ],
+  "meta_by_club_keys": [
+    "tempo_under_pressure",
+    "biomech_z_dispersion",
+    "miss_bias",
+    "consistency"
+  ],
+  "metrics_labeled": true,
+  "strict_json": true,
+  "no_nan": true
+}

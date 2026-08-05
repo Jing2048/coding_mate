@@ -1,0 +1,58 @@
+{
+  "version": "practice-loop-v1",
+  "description": "Next-shot practice correction features from personal (preferred) or tour baseline signed errors. Cues are restrained and metric-derived.",
+  "fields": [
+    "focus_metric",
+    "in_window",
+    "error_sign",
+    "correction_direction",
+    "suggested_cue",
+    "session_consistency",
+    "reasons"
+  ],
+  "commercial_aliases": {
+    "focus_kpi": "focus_metric"
+  },
+  "focus_selection": {
+    "explicit_if_reliable": true,
+    "else": "worst_reliable_abs_z",
+    "min_confidence": 0.35,
+    "priority_tiebreak": [
+      "tempo_s",
+      "rhythm",
+      "peak_omega_to_impact_s",
+      "peak_omega_rad_s",
+      "plane_angle_deg",
+      "hand_speed_peak_m_s",
+      "trajectory_radius_m"
+    ]
+  },
+  "suggested_cues": [
+    "hold_current",
+    "tempo_slow_down",
+    "tempo_speed_up",
+    "rhythm_smooth_transition",
+    "rhythm_lengthen_backswing",
+    "release_delay",
+    "release_earlier",
+    "peak_omega_build",
+    "peak_omega_ease",
+    "plane_flatten",
+    "plane_steepen",
+    "path_radius_stable",
+    "hand_speed_match",
+    "abstain"
+  ],
+  "cue_semantics": {
+    "tempo_s": "duration; observed>baseline (slower) → tempo_speed_up; observed<baseline (faster) → tempo_slow_down",
+    "rhythm": "high → rhythm_smooth_transition; low → rhythm_lengthen_backswing",
+    "peak_omega_to_impact_s": "high (early release) → release_delay; low → release_earlier",
+    "peak_omega_rad_s": "high → peak_omega_ease; low → peak_omega_build",
+    "plane_angle_deg": "high (steeper) → plane_flatten; low → plane_steepen"
+  },
+  "error_sign": [-1.0, 0.0, 1.0],
+  "correction_direction": "opposite_of_error_sign",
+  "metrics_labeled": true,
+  "strict_json": true,
+  "no_nan": true
+}

@@ -1,0 +1,57 @@
+{
+  "version": "personal-baseline-v1",
+  "description": "Serializable personal biomechanics prior. Robust median/MAD center-scale with floors, min sample/coverage gates. Fitted only from ok/degraded confidence-weighted metrics. Core metrics exclude inferred face unless separately calibrated.",
+  "core_metrics": [
+    "tempo_s",
+    "rhythm",
+    "peak_omega_to_impact_s",
+    "peak_omega_rad_s",
+    "plane_angle_deg",
+    "hand_speed_peak_m_s",
+    "trajectory_radius_m"
+  ],
+  "optional_face_metrics": ["clubface_impact_deg"],
+  "fit": {
+    "center": "weighted_median",
+    "scale": "1.4826 * weighted_MAD with per-metric floor",
+    "min_samples_default": 5,
+    "min_coverage_default": 0.4,
+    "outlier_z_default": 4.0,
+    "window_z_default": 1.5,
+    "usable_validity": ["ok", "degraded"],
+    "abstain_validity": ["abstain"]
+  },
+  "metric_prior_keys": [
+    "name",
+    "center",
+    "scale",
+    "units",
+    "kind",
+    "n_samples",
+    "coverage",
+    "confidence",
+    "validity",
+    "window_lo",
+    "window_hi",
+    "mad_raw",
+    "mad_floor",
+    "reasons"
+  ],
+  "score_keys": [
+    "name",
+    "value",
+    "signed_error",
+    "z_score",
+    "in_window",
+    "confidence",
+    "validity",
+    "residual",
+    "units",
+    "kind",
+    "baseline",
+    "reasons"
+  ],
+  "baseline_priority": ["personal", "tour", "none"],
+  "strict_json": true,
+  "no_nan": true
+}

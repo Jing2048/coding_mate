@@ -1,6 +1,6 @@
 {
   "contract_version": "commercial-swing-report-v2",
-  "description": "Commercial biomechanics report with strict metric semantics. Every metric carries kind, validity, confidence, residual, units, and value. Personal/practice/strategy sections are schema placeholders until the personal engine ships.",
+  "description": "Commercial biomechanics report with strict metric semantics. Every metric carries kind, validity, confidence, residual, units, and value. Personal/practice/strategy sections are optional engines: implemented=true only when prior/session/context args actually compute them.",
   "metric_kinds": ["measured", "derived", "proxy", "inferred"],
   "validity": ["ok", "degraded", "abstain"],
   "required_metric_keys": [
@@ -45,30 +45,33 @@
     },
     "personal_baseline": {
       "version": "personal-baseline-v1",
-      "implemented": false,
-      "description": "Signed errors vs personal biomech prior. Placeholder only in this release."
+      "implemented": "bool — true only when prior/personal_score provided",
+      "description": "Signed errors vs personal biomech prior (preferred) or tour ideal fallback. See personal_biomech/schemas/personal-baseline-v1.json."
     },
     "practice_loop": {
       "version": "practice-loop-v1",
-      "implemented": false,
+      "implemented": "bool — true when prior/practice_features provided",
       "fields": [
         "focus_kpi",
         "in_window",
         "correction_direction",
-        "session_consistency"
+        "session_consistency",
+        "error_sign",
+        "suggested_cue"
       ],
-      "description": "Next-shot correction features for practice loop. Schema frozen; engine not wired."
+      "description": "Next-shot correction features for practice loop. See personal_biomech/schemas/practice-loop-v1.json."
     },
     "strategy": {
       "version": "strategy-v1",
-      "implemented": false,
+      "implemented": "bool — true when strategy_reports/features provided",
       "fields": [
         "tempo_under_pressure",
         "dispersion",
         "miss_bias",
-        "consistency_decay"
+        "consistency_decay",
+        "bad_streak"
       ],
-      "description": "Round strategy / SG precursor features. Schema frozen; engine not wired."
+      "description": "Round strategy precursor features (explicitly not strokes gained). See personal_biomech/schemas/strategy-v1.json."
     }
   },
   "finding_rules": {
