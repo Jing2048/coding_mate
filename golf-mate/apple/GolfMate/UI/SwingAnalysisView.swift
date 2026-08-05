@@ -3,156 +3,395 @@ import SwiftUI
 struct SwingAnalysisView: View {
     let result: SwingAnalysisResult
 
+    @State private var showInferred = false
+
+    private var report: SwingAnalysisResult.CommercialReport? {
+        result.commercialReport
+    }
+
+    private var focusMetrics: [SwingAnalysisResult.CommercialMetric] {
+        let truth = report?.truth ?? []
+        let available = truth.filter(\.isAvailable)
+        let preferred = ["tempo_s", "rhythm", "hand_speed_peak_m_s", "downswing_s"]
+        let selected = preferred.compactMap { name in
+            available.first { $0.name == name }
+        }
+        if !selected.isEmpty { return Array(selected.prefix(3)) }
+        return Array(available.prefix(3))
+    }
+
+    private var remainingTruth: [SwingAnalysisResult.CommercialMetric] {
+        let focusIDs = Set(focusMetrics.map(\.id))
+        return (report?.truth ?? []).filter { !focusIDs.contains($0.id) }
+    }
+
+    private var inferredMetrics: [SwingAnalysisResult.CommercialMetric] {
+        report?.inference ?? []
+    }
+
+    private var findings: [SwingAnalysisResult.Finding] {
+        result.displayFindings
+    }
+
+    private var finalTrajectoryValidity: String? {
+        report?.truth.first(where: { $0.name == "trajectory_radius_m" })?.validity
+            ?? result.meta?.feature_quality?["path"]?.validity
+            ?? result.trajectoryQuality?.validity
+    }
+
+    private var canShowFinalTrajectory: Bool {
+        !result.finalTrajectoryPoints.isEmpty && finalTrajectoryValidity != "abstain"
+    }
+
+    private var impactIndex: Int? {
+        // Final trajectory is typically resampled; mark midpoint-ish using phase ratio if possible.
+        guard
+            let phases = result.phases,
+            let points = result.finalTrajectory,
+            !points.isEmpty,
+            phases.finish > phases.address
+        else { return nil }
+        let ratio = Double(phases.impact - phases.address)
+            / Double(phases.finish - phases.address)
+        let index = Int((ratio * Double(points.count - 1)).rounded())
+        return min(max(index, 0), points.count - 1)
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                fidelityBanner
-                if !result.finalTrajectoryPoints.isEmpty {
+            VStack(alignment: .leading, spacing: GolfTheme.sectionSpacing) {
+                AnalysisQualityCard(result: result)
+
+                if report?.practice_loop?.implemented == true {
+                    practiceVerdict
+                }
+
+                if !focusMetrics.isEmpty {
+                    focusSection
+                } else if let features = result.features {
+                    legacyFocusSection(features)
+                }
+
+                if canShowFinalTrajectory {
                     TrajectoryPathView(
                         points: result.finalTrajectoryPoints,
-                        title: "完整算法精修轨迹",
-                        confidence: Float(result.trajectoryConfidence ?? 0),
-                        provisional: false
+                        title: "最终手腕轨迹",
+                        confidence: Float(
+                            result.trajectoryConfidence
+                                ?? result.trajectoryQuality?.confidence
+                                ?? 0
+                        ),
+                        provisional: false,
+                        validity: finalTrajectoryValidity,
+                        impactIndex: impactIndex,
+                        phaseIndices: [],
+                        disclaimer: "精修轨迹来自完整分析；投影仅表达腕部路径形状。"
                     )
+                } else if finalTrajectoryValidity == "abstain" {
+                    trajectoryAbstainCard
                 }
-                metricGrid
-                phaseRow
-                if let findings = result.findings, !findings.isEmpty {
-                    findingsBlock(findings)
+
+                PhaseTimelineView(
+                    phases: result.phases,
+                    sampleRateHz: result.sourceRatesHz?.deviceMotion
+                        ?? result.meta?.fs_hz
+                )
+
+                if !remainingTruth.isEmpty {
+                    truthSection
+                }
+
+                if !inferredMetrics.isEmpty {
+                    inferredSection
+                }
+
+                if !findings.isEmpty {
+                    findingsSection
                 }
             }
             .padding(20)
         }
-        .navigationTitle("完整算法结果")
+        .background(Color(.systemBackground))
+        .navigationTitle("挥杆分析")
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private var fidelityBanner: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("FULL PYTHON PIPELINE")
-                .font(.caption.weight(.bold))
-                .tracking(1.2)
-                .foregroundStyle(.cyan)
-            Text(rateLine)
+    private var trajectoryAbstainCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("手腕轨迹")
+                    .font(.headline)
+                Spacer()
+                TrustBadge(level: .abstain, compact: true)
+            }
+            Text("本杆轨迹质量未通过门限，因此不显示路径图。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(red: 0.02, green: 0.14, blue: 0.18),
-                    Color.black.opacity(0.2),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-    }
-
-    private var rateLine: String {
-        let rates = result.sourceRatesHz
-        let hint = result.highRateImpactHintS.map { String(format: "impact hint %.1f ms", $0 * 1000) }
-            ?? "impact hint n/a"
-        let method = result.meta?.impact_method ?? "—"
-        if let rates {
-            return String(
-                format: "%.0f Hz ACC · %.0f Hz Motion · %@ · %@",
-                rates.accelerometer,
-                rates.deviceMotion,
-                hint,
-                method
-            )
-        }
-        return hint
-    }
-
-    private var metricGrid: some View {
-        let features = result.features
-        return LazyVGrid(
-            columns: [GridItem(.flexible()), GridItem(.flexible())],
-            spacing: 12
-        ) {
-            metric("Tempo", value: features?.tempo_s, unit: "s", digits: 2)
-            metric("Rhythm", value: features?.rhythm, unit: "×", digits: 2)
-            metric("Peak ω", value: features?.peak_omega_rad_s, unit: "rad/s", digits: 1)
-            metric("Hand speed", value: features?.hand_speed_peak_m_s, unit: "m/s", digits: 1)
-            metric("Plane", value: features?.plane_angle_deg, unit: "°", digits: 1)
-            metric("Downswing", value: features?.downswing_s, unit: "s", digits: 2)
-        }
-    }
-
-    private func metric(
-        _ title: String,
-        value: Double?,
-        unit: String,
-        digits: Int
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(value.map { String(format: "%.\(digits)f", $0) } ?? "—")
-                    .font(.title3.monospacedDigit().weight(.semibold))
-                Text(unit)
-                    .font(.caption.weight(.medium))
+            if let reason = result.meta?.feature_quality?["path"]?.reasons?.first {
+                Label(MetricCopy.reason(reason), systemImage: "info.circle")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .golfSurface()
+        .accessibilityElement(children: .combine)
     }
 
-    private var phaseRow: some View {
-        let phases = result.phases
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("PHASES")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.secondary)
+    private var practiceVerdict: some View {
+        let practice = report?.practice_loop
+        let inWindow = practice?.in_window
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                phaseChip("ADD", phases?.address)
-                phaseChip("TOP", phases?.top)
-                phaseChip("IMP", phases?.impact)
-                phaseChip("FIN", phases?.finish)
-            }
-        }
-    }
-
-    private func phaseChip(_ label: String, _ index: Int?) -> some View {
-        VStack(spacing: 2) {
-            Text(label)
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.cyan)
-            Text(index.map(String.init) ?? "—")
-                .font(.footnote.monospacedDigit())
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(Color.cyan.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func findingsBlock(_ findings: [SwingAnalysisResult.Finding]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("FINDINGS")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.secondary)
-            ForEach(findings) { finding in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(finding.code)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(finding.severity == "critical" ? .red : .primary)
-                    Text(finding.message)
-                        .font(.footnote)
+                Label(
+                    inWindow == true ? "进入个人窗口" : "下一杆关注",
+                    systemImage: inWindow == true
+                        ? "checkmark.circle.fill"
+                        : "scope"
+                )
+                .font(.headline)
+                .foregroundStyle(
+                    inWindow == true ? GolfTheme.verified : GolfTheme.warning
+                )
+                Spacer()
+                if let focus = practice?.focus_kpi {
+                    Text(MetricCopy.title(for: focus))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+            Text(MetricCopy.cue(practice?.suggested_cue))
+                .font(.title3.weight(.semibold))
+            Text("判断基于个人基线与本杆有效指标，不使用通用“标准挥杆”作为唯一答案。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .golfSurface()
+        .accessibilityElement(children: .combine)
+    }
+
+    private var focusSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GolfSectionHeader(
+                title: "关注指标",
+                subtitle: practiceFocusSubtitle
+            )
+            VStack(spacing: 4) {
+                ForEach(focusMetrics) { metric in
+                    CommercialMetricRow(metric: metric, emphasize: true)
+                    if metric.id != focusMetrics.last?.id {
+                        Divider()
+                    }
+                }
+            }
+            .golfSurface()
+        }
+    }
+
+    private func legacyFocusSection(_ features: SwingAnalysisResult.FeatureBundle) -> some View {
+        let rows: [(String, Double?, String)] = [
+            ("挥杆时长", features.tempo_s, "s"),
+            ("节奏比", features.rhythm, "×"),
+            ("手腕峰值速度", features.hand_speed_peak_m_s, "m/s"),
+        ]
+        return VStack(alignment: .leading, spacing: 12) {
+            GolfSectionHeader(title: "关注指标", subtitle: "来自基础特征")
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack {
+                        Text(row.0)
+                            .font(.subheadline.weight(.medium))
+                        Spacer()
+                        Text(MetricCopy.formatValue(row.1, units: row.2))
+                            .font(.body.monospacedDigit().weight(.semibold))
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .golfSurface()
+        }
+    }
+
+    private var truthSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GolfSectionHeader(
+                title: "可引用指标",
+                subtitle: "实测或计算层，含有效性标记"
+            )
+            VStack(spacing: 4) {
+                ForEach(remainingTruth) { metric in
+                    CommercialMetricRow(metric: metric)
+                    if metric.id != remainingTruth.last?.id {
+                        Divider()
+                    }
+                }
+            }
+            .golfSurface()
+        }
+    }
+
+    private var inferredSection: some View {
+        DisclosureGroup(isExpanded: $showInferred) {
+            VStack(spacing: 4) {
+                ForEach(inferredMetrics) { metric in
+                    CommercialMetricRow(metric: metric)
+                    if metric.id != inferredMetrics.last?.id {
+                        Divider()
+                    }
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("推断与代理指标")
+                    .font(.headline)
+                Text("非实测层，不可当作击球监测真值")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .background(
+            GolfTheme.quietSurface,
+            in: RoundedRectangle(
+                cornerRadius: GolfTheme.cornerRadius,
+                style: .continuous
+            )
+        )
+        .accessibilityHint("展开查看推断与代理指标")
+    }
+
+    private var findingsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GolfSectionHeader(
+                title: "要点",
+                subtitle: "最多三条，含代理 / 推断标记"
+            )
+            VStack(spacing: 10) {
+                ForEach(findings) { finding in
+                    FindingRow(finding: finding)
+                }
             }
         }
     }
+
+    private var practiceFocusSubtitle: String? {
+        if let kpi = report?.practice_loop?.focus_kpi, !kpi.isEmpty {
+            return "练习焦点：\(MetricCopy.title(for: kpi))"
+        }
+        return "本杆优先阅读的核心数字"
+    }
 }
+
+#if DEBUG
+#Preview {
+    NavigationStack {
+        SwingAnalysisView(
+            result: SwingAnalysisResult(
+                schemaVersion: "1",
+                ok: true,
+                captureMode: "high_rate",
+                sourceRatesHz: .init(accelerometer: 200, deviceMotion: 100),
+                highRateImpactHintS: 0.012,
+                phases: .init(address: 10, top: 80, impact: 110, finish: 160),
+                features: .init(
+                    tempo_s: 1.2,
+                    backswing_s: 0.9,
+                    downswing_s: 0.3,
+                    rhythm: 3.0,
+                    peak_omega_rad_s: 12,
+                    peak_omega_to_impact_s: 0.04,
+                    hand_speed_peak_m_s: 8.5,
+                    plane_angle_deg: 48,
+                    closure_rate_rad_s: nil
+                ),
+                findings: [
+                    .init(
+                        code: "casting_proxy",
+                        severity: "warning",
+                        message: "过渡段释放偏早。",
+                        is_proxy: true,
+                        kind: "proxy"
+                    ),
+                ],
+                finalTrajectory: [[0, 0, 0], [0.1, 0, 0.2], [0.2, 0, 0.05]],
+                trajectoryConfidence: 0.8,
+                trajectoryQuality: .init(
+                    confidence: 0.8,
+                    validity: "ok",
+                    reasons: nil,
+                    pointCount: 3,
+                    source: "full"
+                ),
+                commercialReport: .init(
+                    version: "commercial-swing-report-v2",
+                    truth: [
+                        .init(
+                            name: "tempo_s",
+                            value: 1.2,
+                            units: "s",
+                            kind: "derived",
+                            validity: "ok",
+                            confidence: 0.9,
+                            residual: nil,
+                            reasons: nil
+                        ),
+                        .init(
+                            name: "rhythm",
+                            value: 3.0,
+                            units: "×",
+                            kind: "derived",
+                            validity: "ok",
+                            confidence: 0.85,
+                            residual: nil,
+                            reasons: nil
+                        ),
+                        .init(
+                            name: "hand_speed_peak_m_s",
+                            value: 8.5,
+                            units: "m/s",
+                            kind: "derived",
+                            validity: "ok",
+                            confidence: 0.8,
+                            residual: nil,
+                            reasons: nil
+                        ),
+                    ],
+                    inference: [
+                        .init(
+                            name: "clubface_impact_deg",
+                            value: nil,
+                            units: "°",
+                            kind: "inferred",
+                            validity: "abstain",
+                            confidence: 0.2,
+                            residual: nil,
+                            reasons: ["low_confidence"]
+                        ),
+                    ],
+                    findings: nil,
+                    personal_baseline: nil,
+                    practice_loop: nil,
+                    strategy: nil
+                ),
+                meta: .init(
+                    impact_mode: nil,
+                    impact_method: "accel",
+                    impact_confidence: 0.8,
+                    impact_provenance: nil,
+                    fs_hz: 100,
+                    truth_quality: .init(
+                        overall_validity: "ok",
+                        overall_confidence: 0.82,
+                        impact_provenance: nil,
+                        reasons: nil,
+                        layers: nil
+                    ),
+                    feature_quality: nil
+                ),
+                error: nil
+            )
+        )
+    }
+}
+#endif

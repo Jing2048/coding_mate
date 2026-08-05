@@ -8,7 +8,7 @@ struct GolfMateApp: App {
 
     var body: some Scene {
         WindowGroup {
-            TransferStatusView()
+            MainTabView()
         }
     }
 }
