@@ -1,0 +1,5 @@
+# Ignore local capture blobs — never commit real or fake device dumps by accident.
+captures/**
+!captures/.gitkeep
+*.gmpc
+*.bin

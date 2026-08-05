@@ -1,0 +1,9 @@
+{
+  "schema_version": "watch-gold-manifest-v1",
+  "dataset_id": "golfmate-watch-gold",
+  "status": "not_ready",
+  "ready": false,
+  "honesty": "Repository ships an empty device-gold catalog. Algorithm synthetic gates (cross_multibody, optical twins, mocap-derived IMU) are NOT Watch MEMS evidence and MUST NOT be converted into commercial readiness. Do not add fake captures or set ready=true without consented real-device sessions.",
+  "documented_limitations": [],
+  "records": []
+}

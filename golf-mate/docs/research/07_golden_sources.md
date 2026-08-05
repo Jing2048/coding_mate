@@ -2,9 +2,10 @@
 
 | Rank | Source | Commercial eval | Honesty |
 |-----:|--------|:---------------:|---------|
-| 1 | MultiSenseGolf | yes | External human motion distribution; NOT wrist MEMS noise/mount |
-| 2 | CMU Subject 64 golf mocap | yes | Real human golf kinematics; IMU is synthetic from mocap (like MultiSense) |
-| 3 | cross_multibody robust regimes | yes | Citeable cross-generator; still synthetic — not tour MEMS |
+| 0 | **Watch device-gold** (`data/watch_gold`) | **required for commercial_ready** | Real Watch MEMS — catalog empty in-repo; never substitute synth |
+| 1 | MultiSenseGolf | algo CI / distribution | External human motion distribution; NOT wrist MEMS noise/mount |
+| 2 | CMU Subject 64 golf mocap | algo CI | Real human golf kinematics; IMU is synthetic from mocap (like MultiSense) |
+| 3 | cross_multibody robust regimes | algo CI | Citeable cross-generator; still synthetic — not tour MEMS |
 | 4 | SciRep 2024 Kim & Park protocol | no / pending | Best published single-wrist MEMS protocol; raw not public — CI uses in-house optical-aligned synth twin at 200 Hz |
 | 5 | WIT-KinNet 2026 | no / pending | Highest product-fit when released; chase author share |
 
