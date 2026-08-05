@@ -48,7 +48,11 @@ struct SwingMotionField: View {
                 }
                 context.stroke(
                     stroke,
-                    with: .color(GolfTheme.live.opacity(active ? 0.85 : 0.55)),
+                    with: .color(
+                        isLuminanceReduced
+                            ? Color.secondary.opacity(0.4)
+                            : GolfTheme.live.opacity(active ? 0.85 : 0.55)
+                    ),
                     style: StrokeStyle(
                         lineWidth: active ? 2.5 : 2,
                         lineCap: .round,

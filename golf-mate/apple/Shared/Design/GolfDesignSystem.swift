@@ -9,7 +9,7 @@ enum GolfTheme {
     static let verified = Color.green
     static let warning = Color.orange
     static let destructive = Color.red
-    static let inferred = Color.indigo
+    static let inferred = Color.secondary
     static let quietSurface = Color.secondary.opacity(0.08)
 }
 
@@ -30,7 +30,7 @@ enum TrustLevel: String, Codable, Sendable {
         case .proxy: "代理"
         case .inferred: "推断"
         case .provisional: "预览"
-        case .verified: "已验证"
+        case .verified: "质量正常"
         case .degraded: "质量受限"
         case .abstain: "不输出"
         }
@@ -38,13 +38,13 @@ enum TrustLevel: String, Codable, Sendable {
 
     var icon: String {
         switch self {
-        case .measured, .verified: "checkmark.seal.fill"
-        case .derived: "function"
-        case .proxy: "arrow.triangle.branch"
+        case .measured, .verified: "checkmark.circle.fill"
+        case .derived: "sum"
+        case .proxy: "arrow.triangle.2.circlepath"
         case .inferred: "waveform.path.ecg"
-        case .provisional: "clock.arrow.circlepath"
+        case .provisional: "clock"
         case .degraded: "exclamationmark.triangle.fill"
-        case .abstain: "nosign"
+        case .abstain: "minus.circle"
         }
     }
 

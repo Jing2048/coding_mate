@@ -26,7 +26,11 @@ struct SwingAnalysisView: View {
     }
 
     private var inferredMetrics: [SwingAnalysisResult.CommercialMetric] {
-        report?.inference ?? []
+        (report?.inference ?? []).filter(\.isAvailable)
+    }
+
+    private var abstainedInferenceCount: Int {
+        (report?.inference ?? []).filter { !$0.isAvailable }.count
     }
 
     private var findings: [SwingAnalysisResult.Finding] {
@@ -101,7 +105,7 @@ struct SwingAnalysisView: View {
                     truthSection
                 }
 
-                if !inferredMetrics.isEmpty {
+                if !inferredMetrics.isEmpty || abstainedInferenceCount > 0 {
                     inferredSection
                 }
 
@@ -231,12 +235,23 @@ struct SwingAnalysisView: View {
 
     private var inferredSection: some View {
         DisclosureGroup(isExpanded: $showInferred) {
-            VStack(spacing: 4) {
-                ForEach(inferredMetrics) { metric in
-                    CommercialMetricRow(metric: metric)
-                    if metric.id != inferredMetrics.last?.id {
-                        Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                if inferredMetrics.isEmpty {
+                    Text("本杆高阶指标均未通过质量门，因此不显示推断数值。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(inferredMetrics) { metric in
+                        CommercialMetricRow(metric: metric)
+                        if metric.id != inferredMetrics.last?.id {
+                            Divider()
+                        }
                     }
+                }
+                if abstainedInferenceCount > 0 {
+                    Text("\(abstainedInferenceCount) 项推断因质量不足未输出")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .padding(.top, 8)
@@ -244,7 +259,7 @@ struct SwingAnalysisView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("推断与代理指标")
                     .font(.headline)
-                Text("非实测层，不可当作击球监测真值")
+                Text("非实测层；仅显示通过各自校准门的指标")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

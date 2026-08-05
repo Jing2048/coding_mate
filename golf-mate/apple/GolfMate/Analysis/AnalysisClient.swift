@@ -16,7 +16,9 @@ final class AnalysisClient: ObservableObject {
     @Published private(set) var serverHealthy = false
     @Published private(set) var isCheckingServer = false
     @Published private(set) var lastAnalyzedURL: URL?
+    @Published private(set) var lastAttemptedURL: URL?
 
+    private var analysisGeneration = 0
     private init() {}
 
     func persistServerURL() {
@@ -46,9 +48,16 @@ final class AnalysisClient: ObservableObject {
     }
 
     func analyze(captureFile url: URL) async {
+        analysisGeneration += 1
+        let generation = analysisGeneration
+        lastAttemptedURL = url
         isAnalyzing = true
         lastError = nil
-        defer { isAnalyzing = false }
+        defer {
+            if generation == analysisGeneration {
+                isAnalyzing = false
+            }
+        }
 
         do {
             let data = try Data(contentsOf: url)
@@ -83,10 +92,12 @@ final class AnalysisClient: ObservableObject {
             if http.statusCode >= 400 || decoded.ok == false {
                 throw AnalysisError.server(decoded.error ?? "analysis failed")
             }
+            guard generation == analysisGeneration else { return }
             lastResult = decoded
             lastAnalyzedURL = url
             serverHealthy = true
         } catch {
+            guard generation == analysisGeneration else { return }
             lastError = error.localizedDescription
         }
     }

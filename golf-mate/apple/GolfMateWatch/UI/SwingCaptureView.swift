@@ -33,7 +33,11 @@ struct SwingCaptureView: View {
     private var rateModeBadge: some View {
         Label(rateModeTitle, systemImage: rateModeIcon)
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(capture.isCompatMode ? GolfTheme.warning : GolfTheme.live)
+            .foregroundStyle(
+                isLuminanceReduced
+                    ? Color.secondary
+                    : (capture.isCompatMode ? GolfTheme.warning : GolfTheme.live)
+            )
             .symbolRenderingMode(.hierarchical)
             .lineLimit(1)
             .minimumScaleFactor(0.85)
@@ -106,7 +110,11 @@ struct SwingCaptureView: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
             }
-            if case .ready = capture.state, !capture.edgePreview.points.isEmpty {
+            if
+                case .ready = capture.state,
+                !capture.edgePreview.points.isEmpty,
+                !isLuminanceReduced
+            {
                 TrustBadge(level: .provisional, compact: true)
             }
         }
@@ -165,7 +173,7 @@ struct SwingCaptureView: View {
                 capture.reset()
             }
         case .unsupported:
-            Label("此设备无法采集", systemImage: "applewatch.slash")
+            Label("此设备无法采集", systemImage: "exclamationmark.triangle")
                 .font(.caption)
                 .foregroundStyle(GolfTheme.warning)
                 .symbolRenderingMode(.hierarchical)
@@ -239,13 +247,13 @@ struct SwingCaptureView: View {
         case .preparing:
             "正在启动传感器"
         case .processing:
-            "封装并发送至 iPhone"
+            "正在保存并发送至 iPhone"
         case .ready:
             capture.edgePreview.points.isEmpty
                 ? "完整分析将在 iPhone 更新"
                 : "腕部轨迹预览"
-        case let .failed(message):
-            message.isEmpty ? "采集未完成，请重试" : message
+        case .failed:
+            "采集未完成，请重试"
         case .unsupported:
             "需要支持 Core Motion 的 Apple Watch"
         case .recording:

@@ -17,9 +17,20 @@ struct SwingDashboardView: View {
 
     private var status: Status {
         if analysis.isAnalyzing { return .analyzing }
-        if analysis.lastError != nil { return .error }
-        if analysis.lastResult != nil { return .analyzed }
+        if
+            analysis.lastError != nil,
+            analysis.lastAttemptedURL == receiver.latestCaptureURL
+        {
+            return .error
+        }
+        if
+            analysis.lastResult != nil,
+            analysis.lastAnalyzedURL == receiver.latestCaptureURL
+        {
+            return .analyzed
+        }
         if receiver.latestCaptureURL != nil { return .captured }
+        if analysis.lastResult != nil { return .analyzed }
         if let preview = receiver.latestPreview, !preview.points.isEmpty {
             return .preview
         }
@@ -47,7 +58,9 @@ struct SwingDashboardView: View {
                     )
                 }
 
-                progressCard
+                if status != .waiting {
+                    progressCard
+                }
 
                 if let result = analysis.lastResult {
                     lastResultCard(result)
@@ -57,16 +70,17 @@ struct SwingDashboardView: View {
                     errorCard
                 }
 
-                watchHint
             }
             .padding(20)
         }
         .background(Color(.systemBackground))
         .navigationTitle("Golf-ai-Jing")
         .navigationBarTitleDisplayMode(.large)
-        .onChange(of: receiver.latestCaptureURL) { _, url in
-            guard let url else { return }
-            Task { await analysis.analyze(captureFile: url) }
+        .onChange(of: receiver.captureRevision) { _, _ in
+            analyzeLatest(force: true)
+        }
+        .task {
+            analyzeLatest(force: false)
         }
     }
 
@@ -89,7 +103,6 @@ struct SwingDashboardView: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
-            statusChipRow
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
@@ -108,80 +121,10 @@ struct SwingDashboardView: View {
         }
     }
 
-    private var statusChipRow: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                ForEach(chipItems, id: \.title) { item in
-                    statusChip(item.title, active: item.active, done: item.done)
-                }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(chipItems, id: \.title) { item in
-                    statusChip(item.title, active: item.active, done: item.done)
-                }
-            }
-        }
-        .padding(.top, 4)
-    }
-
-    private var chipItems: [(title: String, active: Bool, done: Bool)] {
-        let hasPreview = receiver.latestPreview.map { !$0.points.isEmpty } ?? false
-        let hasCapture = receiver.latestCaptureURL != nil
-        let hasResult = analysis.lastResult != nil
-        let analyzing = analysis.isAnalyzing
-        let failed = analysis.lastError != nil && !analyzing
-
-        return [
-            (
-                "等待",
-                status == .waiting,
-                hasPreview || hasCapture || hasResult || analyzing
-            ),
-            (
-                "预览",
-                status == .preview || (hasPreview && analyzing),
-                hasPreview && (hasCapture || hasResult || analyzing)
-            ),
-            (
-                "采集",
-                status == .captured || (hasCapture && analyzing),
-                (hasCapture && (analyzing || hasResult || failed))
-            ),
-            (
-                "分析",
-                analyzing || (failed && hasCapture),
-                hasResult && !analyzing
-            ),
-            (
-                "完成",
-                status == .analyzed,
-                status == .analyzed
-            ),
-        ]
-    }
-
-    private func statusChip(_ title: String, active: Bool, done: Bool) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: done ? "checkmark.circle.fill" : (active ? "circle.fill" : "circle"))
-                .font(.caption2)
-                .foregroundStyle(done ? GolfTheme.verified : (active ? statusColor : Color.secondary.opacity(0.45)))
-            Text(title)
-                .font(.caption.weight(active ? .semibold : .regular))
-                .foregroundStyle(active || done ? .primary : .secondary)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            (active ? statusColor.opacity(0.12) : Color.clear),
-            in: Capsule()
-        )
-        .accessibilityLabel("\(title)\(done ? "，已完成" : (active ? "，进行中" : ""))")
-    }
-
     private var statusSymbol: String {
         switch status {
         case .waiting: return "applewatch.radiowaves.left.and.right"
-        case .preview: return "scribble.variable"
+        case .preview: return "waveform.path.ecg"
         case .captured: return "tray.and.arrow.down"
         case .analyzing: return "waveform.path.ecg"
         case .analyzed: return "checkmark.seal"
@@ -293,12 +236,9 @@ struct SwingDashboardView: View {
                 .tint(GolfTheme.destructive)
                 .disabled(analysis.isAnalyzing)
             }
-            NavigationLink {
-                LabSettingsView()
-            } label: {
-                Label("打开设置检查连接", systemImage: "gearshape")
-            }
-            .font(.subheadline)
+            Text("如仍无法完成，请在「设置」中检查分析连接。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .golfSurface()
         .accessibilityElement(children: .contain)
@@ -322,19 +262,6 @@ struct SwingDashboardView: View {
         .golfSurface()
     }
 
-    private var watchHint: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("使用提示")
-                .font(.headline)
-            Text("佩戴 Watch 完成挥杆采集。服务地址与原始导出在「设置」中。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 4)
-    }
-
     // MARK: - Helpers
 
     private var shouldShowPreview: Bool {
@@ -345,7 +272,11 @@ struct SwingDashboardView: View {
         // trajectory on success (still show if analyzing or error without replacing).
         if analysis.isAnalyzing { return true }
         if status == .error { return true }
-        if let result = analysis.lastResult, !result.finalTrajectoryPoints.isEmpty {
+        if
+            let result = analysis.lastResult,
+            analysis.lastAnalyzedURL == receiver.latestCaptureURL,
+            !result.finalTrajectoryPoints.isEmpty
+        {
             return false
         }
         return true
@@ -366,12 +297,21 @@ struct SwingDashboardView: View {
            tempo.isAvailable,
            let value = tempo.value
         {
-            return String(format: "挥杆时长 %.2f s", value)
+            let quality = tempo.validity == "degraded" ? " · 质量受限" : ""
+            return String(format: "站位至击球 %.2f s%@", value, quality)
         }
         if let tempo = result.features?.tempo_s {
             return String(format: "挥杆时长 %.2f s", tempo)
         }
         return result.ok ? "质量摘要与指标已就绪" : "结果含警告"
+    }
+
+    private func analyzeLatest(force: Bool) {
+        guard let url = receiver.latestCaptureURL else { return }
+        if !force, analysis.lastAttemptedURL == url {
+            return
+        }
+        Task { await analysis.analyze(captureFile: url) }
     }
 }
 

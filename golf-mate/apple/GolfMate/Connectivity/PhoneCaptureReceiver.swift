@@ -22,6 +22,7 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
     @Published private(set) var latestPreviewSessionID: String?
     @Published private(set) var errorMessage: String?
     @Published private(set) var connectionState: ConnectionState = .activating
+    @Published private(set) var captureRevision = 0
 
     private override init() {
         super.init()
@@ -85,6 +86,7 @@ final class PhoneCaptureReceiver: NSObject, ObservableObject, WCSessionDelegate 
                 self.latestCaptureMode = mode
                 self.latestAccelerometerHz = accelHz
                 self.latestDeviceMotionHz = motionHz
+                self.captureRevision += 1
                 self.errorMessage = nil
             }
             session.transferUserInfo([

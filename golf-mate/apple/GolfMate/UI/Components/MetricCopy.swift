@@ -145,6 +145,13 @@ enum MetricCopy {
         return "\(formatted) \(units)"
     }
 
+    static func displayUnits(for name: String, raw: String) -> String {
+        if name == "rhythm" { return "×" }
+        if raw == "deg" { return "°" }
+        if raw == "1" { return "" }
+        return raw
+    }
+
     static func digits(for units: String) -> Int {
         switch units {
         case "°", "deg", "rad/s", "m/s": return 1

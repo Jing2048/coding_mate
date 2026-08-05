@@ -40,7 +40,7 @@ struct AnalysisQualityCard: View {
 
     private var trustSummary: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TrustBadge(level: overallTrust)
+            qualityBadge
             Text(overallCaption)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -63,29 +63,46 @@ struct AnalysisQualityCard: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var overallTrust: TrustLevel {
-        let validity = result.meta?.truth_quality?.overall_validity
+    private var validityRaw: String {
+        result.meta?.truth_quality?.overall_validity
             ?? result.trajectoryQuality?.validity
-        switch validity {
-        case "ok": return .verified
-        case "degraded": return .degraded
-        case "abstain": return .abstain
+            ?? (result.ok ? "ok" : "degraded")
+    }
+
+    private var qualityBadge: some View {
+        let title: String
+        let symbol: String
+        let color: Color
+        switch validityRaw {
+        case "ok":
+            title = "质量正常"
+            symbol = "checkmark.circle.fill"
+            color = GolfTheme.verified
+        case "abstain":
+            title = "关键层弃权"
+            symbol = "minus.circle"
+            color = .secondary
         default:
-            if result.ok { return .derived }
-            return .degraded
+            title = "质量受限"
+            symbol = "exclamationmark.triangle.fill"
+            color = GolfTheme.warning
         }
+        return Label(title, systemImage: symbol)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(color.opacity(0.12), in: Capsule())
     }
 
     private var overallCaption: String {
-        switch overallTrust {
-        case .verified:
+        switch validityRaw {
+        case "ok":
             return "可引用层指标质量正常"
-        case .degraded:
-            return "部分指标质量受限，请结合说明阅读"
-        case .abstain:
+        case "abstain":
             return "关键指标已弃权，未给出数字"
         default:
-            return "基于腕部传感器的计算结果"
+            return "部分指标质量受限，请结合说明阅读"
         }
     }
 
@@ -98,23 +115,19 @@ struct AnalysisQualityCard: View {
     }
 
     private var confidenceColor: Color {
-        switch overallTrust {
-        case .verified, .measured: return GolfTheme.verified
-        case .degraded, .proxy, .provisional: return GolfTheme.warning
-        case .abstain: return .secondary
-        default: return .primary
+        switch validityRaw {
+        case "ok": return .primary
+        case "abstain": return .secondary
+        default: return GolfTheme.warning
         }
     }
 
     private var validityText: String {
-        let raw = result.meta?.truth_quality?.overall_validity
-            ?? result.trajectoryQuality?.validity
-            ?? (result.ok ? "ok" : "degraded")
-        switch raw {
+        switch validityRaw {
         case "ok": return "有效性：正常"
         case "degraded": return "有效性：受限"
         case "abstain": return "有效性：弃权"
-        default: return "有效性：\(raw)"
+        default: return "有效性：未知"
         }
     }
 
@@ -131,7 +144,7 @@ struct AnalysisQualityCard: View {
     }
 
     private var accessibilitySummary: String {
-        "\(overallTrust.title)，\(confidenceText)，\(validityText)"
+        "\(overallCaption)，\(confidenceText)，\(validityText)"
     }
 
 }

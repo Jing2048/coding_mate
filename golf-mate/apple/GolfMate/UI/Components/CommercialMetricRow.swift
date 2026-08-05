@@ -36,12 +36,13 @@ struct CommercialMetricRow: View {
 
     @ViewBuilder
     private var valueBlock: some View {
+        let units = MetricCopy.displayUnits(for: metric.name, raw: metric.units)
         if metric.isAvailable {
             Text(
                 MetricCopy.formatValue(
                     metric.value,
-                    units: metric.units,
-                    digits: MetricCopy.digits(for: metric.units)
+                    units: units,
+                    digits: MetricCopy.digits(for: units)
                 )
             )
             .font(.title3.monospacedDigit().weight(.semibold))
@@ -92,10 +93,11 @@ struct CommercialMetricRow: View {
     private var accessibilitySummary: String {
         let title = MetricCopy.title(for: metric.name)
         if metric.isAvailable {
+            let units = MetricCopy.displayUnits(for: metric.name, raw: metric.units)
             let value = MetricCopy.formatValue(
                 metric.value,
-                units: metric.units,
-                digits: MetricCopy.digits(for: metric.units)
+                units: units,
+                digits: MetricCopy.digits(for: units)
             )
             return "\(title)，\(metric.trustLevel.title)，\(value)"
         }

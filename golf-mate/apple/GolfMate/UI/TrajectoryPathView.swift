@@ -14,12 +14,7 @@ struct TrajectoryPathView: View {
 
     private var trust: TrustLevel {
         if provisional { return .provisional }
-        switch validity {
-        case "ok": return .verified
-        case "degraded": return .degraded
-        case "abstain": return .abstain
-        default: return confidence >= 0.6 ? .derived : .degraded
-        }
+        return .derived
     }
 
     private var strokeColor: Color {
@@ -34,11 +29,17 @@ struct TrajectoryPathView: View {
                         .font(.headline)
                     Spacer(minLength: 8)
                     TrustBadge(level: trust, compact: true)
+                    if validity == "degraded" {
+                        TrustBadge(level: .degraded, compact: true)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title)
                         .font(.headline)
                     TrustBadge(level: trust, compact: true)
+                    if validity == "degraded" {
+                        TrustBadge(level: .degraded, compact: true)
+                    }
                 }
             }
 
