@@ -14,13 +14,12 @@ Bundle IDs (unique; `GolfMate` is taken on App Store Connect):
 ```text
 Apple Watch
   HKWorkoutSession
-  ├─ live rail: CMMotionManager 100 Hz → Core ML/kinematic preview + haptic
-  │     └─ PreviewPacketV1 → sendMessageData (queued fallback)
-  └─ fidelity rail
-        ├─ Series 8 / Ultra+: CMBatchedSensorManager ~800 ACC / ~200 Motion
-        └─ Series 5 compat:  CMMotionManager ~100 ACC / ~100 Motion
-              ↓ PackedCaptureV2 + CRC
-          transferFile (retained until iPhone ACK)
+  └─ Series 8 / Ultra+: CMBatchedSensorManager ~800 ACC / ~200 Motion
+        ├─ fidelity rail → PackedCaptureV2 + CRC → transferFile (ACK)
+        └─ live preview: Device Motion decimated ~100 Hz
+              → Core ML/kinematic preview + haptic → PreviewPacketV1
+     Series 5 / high-rate fallback: CMMotionManager ~100 ACC / ~100 Motion
+              (never run CMMotionManager Device Motion beside batched sensors)
               ↓
           iPhone PROVISIONAL preview → full Python analyze_swing → FINAL path
 ```
