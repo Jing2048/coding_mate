@@ -22,6 +22,12 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Golf-ai-Jing uses HealthKit so the paired Apple Watch can start a golf workout for swing capture.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Golf-ai-Jing records the active golf workout used for Watch swing capture.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Golf-ai-Jing analyzes wrist motion captured on Apple Watch during your golf swing.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

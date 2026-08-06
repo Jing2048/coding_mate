@@ -87,8 +87,11 @@ Confirm both targets:
 
 Set your Development Team for both targets, keep HealthKit enabled, and run on a
 physical Apple Watch. Series 8 / Ultra+ uses the 800/200 high-rate path; Series 5
-(and other watches with Core Motion only) automatically use ~100 Hz compat mode.
-`CMBatchedSensorManager` does not provide high-rate data in the Watch simulator.
+(and other watches with Core Motion only) automatically use ~100 Hz compat mode
+(single Device Motion stream; total accel synthesized as gravity + userAcceleration).
+On Series 5 the HK workout is best-effort / indoor — Core Motion still starts if
+workout setup fails. `CMBatchedSensorManager` does not provide high-rate data in
+the Watch simulator.
 
 **OS note:** app targets watchOS 10. Series 5’s last supported OS is watchOS 10,
 so install from an Xcode/watchOS 10 toolchain or keep the Watch on watchOS 10.

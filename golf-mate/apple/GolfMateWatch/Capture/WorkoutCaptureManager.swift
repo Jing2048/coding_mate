@@ -29,7 +29,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     @Published private(set) var displayDeviceMotionHz = 200
 
     private let healthStore = HKHealthStore()
-    private let batchedSensors = CMBatchedSensorManager()
+    private lazy var batchedSensors = CMBatchedSensorManager()
     private let motionManager = CMMotionManager()
     private let motionQueue: OperationQueue = {
         let queue = OperationQueue()
@@ -51,6 +51,8 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     /// Bumped whenever sensor streams are (re)started so teardown errors from an
     /// old high-rate task cannot fail a healthy compat fallback session.
     private var sensorEpoch = 0
+    /// Compat (Series 5) can keep recording even if the workout session dies.
+    private var workoutOptional = false
 
     /// Series 8 / Ultra+ high-rate path.
     var highRateSupported: Bool {
@@ -119,13 +121,27 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         edgePreview = .empty
         hapticEnqueueLatencyMs = 0
         livePreviewSampleCounter = 0
+        workoutOptional = !highRateSupported || preferCompatOnly
 
         Task {
             do {
                 try await authorizeHealthKit()
-                try ensureWorkoutSharingAuthorized()
                 await buffer.reset()
-                try beginWorkout()
+                if workoutOptional {
+                    // Series 5 / compat: CMMotionManager does not require an
+                    // active HK workout. Best-effort session for background
+                    // runtime; sensors always start even if workout setup fails.
+                    if healthStore.authorizationStatus(for: .workoutType())
+                        != .sharingDenied
+                    {
+                        try? beginWorkout(required: false)
+                    } else {
+                        enterRecordingAndStartSensors()
+                    }
+                } else {
+                    try ensureWorkoutSharingAuthorized()
+                    try beginWorkout(required: true)
+                }
             } catch {
                 state = .failed(Self.userFacingMessage(for: error))
             }
@@ -139,7 +155,9 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         stopSensorStreams()
 
         let endDate = Date()
-        workoutSession?.end()
+        if let session = workoutSession {
+            session.end()
+        }
         workoutBuilder?.endCollection(withEnd: endDate) { [weak self] _, _ in
             Task { @MainActor in
                 self?.workoutBuilder?.finishWorkout { _, _ in }
@@ -147,8 +165,8 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         }
 
         Task {
-            // Let the final delivered batch enter the actor before snapshotting.
-            try? await Task.sleep(for: .milliseconds(100))
+            // Let the final delivered samples enter the actor before snapshotting.
+            try? await Task.sleep(for: .milliseconds(120))
             let snapshot = await buffer.snapshot()
             do {
                 let payload = makePayload(snapshot: snapshot, endedAt: endDate)
@@ -172,10 +190,12 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         refreshCapability()
     }
 
-    private func beginWorkout() throws {
+    private func beginWorkout(required: Bool) throws {
         let configuration = HKWorkoutConfiguration()
         configuration.activityType = .golf
-        configuration.locationType = .outdoor
+        // Indoor avoids an outdoor-location dependency we never use for IMU capture.
+        // Outdoor + missing location auth is a common immediate Start failure on S5.
+        configuration.locationType = .indoor
 
         let workoutSession = try HKWorkoutSession(
             healthStore: healthStore,
@@ -190,24 +210,40 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         self.workoutSession = workoutSession
         self.workoutBuilder = builder
 
+        workoutSession.prepare()
         let startDate = startedAt ?? Date()
         workoutSession.startActivity(with: startDate)
         builder.beginCollection(withStart: startDate) { [weak self] success, error in
             Task { @MainActor in
                 guard let self else { return }
                 guard success else {
-                    self.state = .failed(
-                        Self.userFacingMessage(
-                            for: error ?? CaptureSetupError.workoutFailed
+                    if required {
+                        self.state = .failed(
+                            Self.userFacingMessage(
+                                for: error ?? CaptureSetupError.workoutFailed
+                            )
                         )
-                    )
+                    } else {
+                        // Drop the broken session and capture with Core Motion only.
+                        self.workoutSession?.end()
+                        self.workoutSession = nil
+                        self.workoutBuilder = nil
+                        self.enterRecordingAndStartSensors()
+                    }
                     return
                 }
-                self.state = .recording
-                WKInterfaceDevice.current().play(.start)
-                self.startSensorStreams()
+                self.enterRecordingAndStartSensors()
             }
         }
+    }
+
+    private func enterRecordingAndStartSensors() {
+        guard state == .preparing || state == .recording else { return }
+        if state != .recording {
+            state = .recording
+            WKInterfaceDevice.current().play(.start)
+        }
+        startSensorStreams()
     }
 
     private func startSensorStreams() {
@@ -282,43 +318,16 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     }
 
     private func startCompatStreams(epoch: Int) {
-        // Series 5 / legacy path, or high-rate fallback: request 100 Hz.
-        let interval = 1.0 / 100.0
-        motionManager.accelerometerUpdateInterval = interval
-        motionManager.deviceMotionUpdateInterval = interval
-
-        let sensorBuffer = buffer
-        motionManager.startAccelerometerUpdates(to: motionQueue) { [weak self] data, error in
-            if let error {
-                Task { @MainActor in
-                    self?.handleSensorFailure(error, rail: .accelerometer, epoch: epoch)
-                }
-                return
-            }
-            guard let data else { return }
-            let sample = Vector3Sample(
-                timestamp: data.timestamp,
-                x: data.acceleration.x,
-                y: data.acceleration.y,
-                z: data.acceleration.z
-            )
-            Task {
-                do {
-                    try await sensorBuffer.appendAccelerometer([sample])
-                    let counts = await sensorBuffer.counts()
-                    if counts.accelerometer.isMultiple(of: 10) {
-                        await MainActor.run {
-                            self?.accelerometerSamples = counts.accelerometer
-                        }
-                    }
-                } catch {
-                    await MainActor.run {
-                        self?.handleSensorFailure(error, rail: .accelerometer, epoch: epoch)
-                    }
-                }
-            }
+        // Series 5: use a single Device Motion stream at ~100 Hz.
+        // Starting raw accelerometer beside Device Motion is a known failure mode
+        // on older watches; total acceleration (g) is gravity + userAcceleration.
+        guard motionManager.isDeviceMotionAvailable else {
+            failCapture(CaptureSetupError.motionUnavailable)
+            return
         }
 
+        motionManager.deviceMotionUpdateInterval = 1.0 / 100.0
+        let sensorBuffer = buffer
         motionManager.startDeviceMotionUpdates(
             using: .xArbitraryZVertical,
             to: motionQueue
@@ -330,13 +339,21 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                 return
             }
             guard let data else { return }
-            let sample = Self.deviceMotionSample(from: data)
+            let motionSample = Self.deviceMotionSample(from: data)
+            let accelSample = Vector3Sample(
+                timestamp: data.timestamp,
+                x: data.gravity.x + data.userAcceleration.x,
+                y: data.gravity.y + data.userAcceleration.y,
+                z: data.gravity.z + data.userAcceleration.z
+            )
             Task {
                 do {
-                    try await sensorBuffer.appendDeviceMotion([sample])
+                    try await sensorBuffer.appendAccelerometer([accelSample])
+                    try await sensorBuffer.appendDeviceMotion([motionSample])
                     let counts = await sensorBuffer.counts()
                     await MainActor.run {
                         guard let self else { return }
+                        self.accelerometerSamples = counts.accelerometer
                         self.deviceMotionSamples = counts.deviceMotion
                         self.consumeLivePreview(data)
                     }
@@ -397,17 +414,27 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             return
         }
 
+        // Compat: ignore a single early callback error while permission sheets
+        // settle; fail only if we still have no samples after the stream dies.
+        if captureMode == .compat, accelerometerSamples == 0, deviceMotionSamples == 0 {
+            failCapture(error)
+            return
+        }
+        if captureMode == .compat, hasFidelity {
+            return
+        }
+
         failCapture(error)
     }
 
     private func fallbackToCompat(reason: Error) {
         preferCompatOnly = true
+        workoutOptional = true
         stopSensorStreams()
         captureMode = .compat
         displayAccelerometerHz = 100
         displayDeviceMotionHz = 100
-        // Keep the active workout; only switch the motion source.
-        // startSensorStreams bumps sensorEpoch so stale high-rate errors die.
+        // Keep the active workout when possible; only switch the motion source.
         startSensorStreams()
         #if DEBUG
         print("High-rate capture fell back to compat: \(reason.localizedDescription)")
@@ -419,8 +446,11 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         deviceMotionTask?.cancel()
         accelerometerTask = nil
         deviceMotionTask = nil
-        batchedSensors.stopAccelerometerUpdates()
-        batchedSensors.stopDeviceMotionUpdates()
+        // Do not lazy-init CMBatchedSensorManager on Series 5.
+        if highRateSupported {
+            batchedSensors.stopAccelerometerUpdates()
+            batchedSensors.stopDeviceMotionUpdates()
+        }
         motionManager.stopAccelerometerUpdates()
         motionManager.stopDeviceMotionUpdates()
     }
@@ -519,6 +549,11 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     }
 
     private func authorizeHealthKit() async throws {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            // Compat can still capture IMU without HealthKit on rare devices.
+            if workoutOptional { return }
+            throw CaptureSetupError.healthKitUnavailable
+        }
         // watchOS 10+ provides a typed async HealthKit API; do not wrap the
         // completion-handler variant in withCheckedThrowingContinuation or the
         // Void generic cannot be inferred.
@@ -540,10 +575,18 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             return setup.errorDescription ?? setup.localizedDescription
         }
         let ns = error as NSError
+        if let hk = error as? HKError, hk.code == .errorAnotherWorkoutSessionStarted {
+            return "手表上已有其他训练进行中，请先结束后再试。"
+        }
+        if ns.domain == HKError.errorDomain,
+           ns.code == HKError.Code.errorAnotherWorkoutSessionStarted.rawValue
+        {
+            return "手表上已有其他训练进行中，请先结束后再试。"
+        }
         if ns.domain == "CMErrorDomain" {
             switch ns.code {
             case 105, 107:
-                return "无法访问运动传感器，请在系统设置中允许“运动与健身”。"
+                return "无法访问运动传感器，请在 iPhone「设置 → 隐私 → 运动与健身」中允许。"
             case 109:
                 return "需要先开始高尔夫体能训练会话，请重试。"
             default:
@@ -571,6 +614,18 @@ extension WorkoutCaptureManager: HKWorkoutSessionDelegate {
         didFailWithError error: Error
     ) {
         Task { @MainActor in
+            // Series 5 compat: keep IMU capture alive if the workout dies.
+            if self.workoutOptional, self.state == .recording {
+                self.workoutSession = nil
+                self.workoutBuilder = nil
+                return
+            }
+            if self.workoutOptional, self.state == .preparing {
+                self.workoutSession = nil
+                self.workoutBuilder = nil
+                self.enterRecordingAndStartSensors()
+                return
+            }
             guard self.state == .preparing || self.state == .recording else { return }
             self.failCapture(error)
         }
@@ -579,14 +634,20 @@ extension WorkoutCaptureManager: HKWorkoutSessionDelegate {
 
 private enum CaptureSetupError: LocalizedError {
     case healthKitDenied
+    case healthKitUnavailable
     case workoutFailed
+    case motionUnavailable
 
     var errorDescription: String? {
         switch self {
         case .healthKitDenied:
             return "请允许写入体能训练，否则无法采集挥杆。"
+        case .healthKitUnavailable:
+            return "此设备不支持 HealthKit 训练会话。"
         case .workoutFailed:
             return "无法启动高尔夫训练会话，请重试。"
+        case .motionUnavailable:
+            return "此 Apple Watch 无法提供 Device Motion。"
         }
     }
 }

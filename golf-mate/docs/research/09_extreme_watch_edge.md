@@ -81,7 +81,9 @@ mean ≤10 cm / P95 ≤17 cm，相位平均绝对时间误差 P95 ≤40 ms。该
    Device Motion。真机上双开会让 batched 轨立刻失败（表现为一点「开始采集」就
    「出错」）。Preview / 触觉改从 batched Device Motion 抽稀到约 100 Hz；若高采
    样启动仍失败且几乎无样本，自动回退到 100 Hz compat，不得直接中断整杆。
-2. Series 5 只运行 100 Hz rail，Impact 精度不得标成 high-rate。
+2. Series 5 只运行 100 Hz rail（单路 Device Motion，加速度由
+   gravity+userAcceleration 合成；HK workout 用 indoor 且失败不阻断采集），
+   Impact 精度不得标成 high-rate。
 3. 模型发布门必须包含独立生成器、真实 Watch、optical-aligned 数据，不能只看训练
    合成集。
 4. Packed v2 相对 Double JSON 的量化误差必须低于传感器噪声且不改变现有算法预算。

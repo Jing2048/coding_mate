@@ -38,6 +38,9 @@ targets:
         CFBundleDisplayName: Golf-ai-Jing
         CFBundleName: Golf-ai-Jing
         UILaunchScreen: {}
+        NSHealthShareUsageDescription: Golf-ai-Jing uses HealthKit so the paired Apple Watch can start a golf workout for swing capture.
+        NSHealthUpdateUsageDescription: Golf-ai-Jing records the active golf workout used for Watch swing capture.
+        NSMotionUsageDescription: Golf-ai-Jing analyzes wrist motion captured on Apple Watch during your golf swing.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UISupportedInterfaceOrientations:
