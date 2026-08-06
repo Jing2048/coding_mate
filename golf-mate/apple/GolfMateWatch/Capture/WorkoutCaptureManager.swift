@@ -132,11 +132,15 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                     // active HK workout. Best-effort session for background
                     // runtime; sensors always start even if workout setup fails.
                     if healthStore.authorizationStatus(for: .workoutType())
-                        != .sharingDenied
+                        == .sharingDenied
                     {
-                        try? beginWorkout(required: false)
-                    } else {
                         enterRecordingAndStartSensors()
+                    } else {
+                        do {
+                            try beginWorkout(required: false)
+                        } catch {
+                            enterRecordingAndStartSensors()
+                        }
                     }
                 } else {
                     try ensureWorkoutSharingAuthorized()
