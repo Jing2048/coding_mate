@@ -4,13 +4,14 @@
 
 Apple Watch 的高采样率与低延迟是两种不同的系统能力：
 
-- `CMMotionManager`：约 100 Hz 逐样本回调，承担端上轨迹与触觉闭环；
 - `CMBatchedSensorManager`：800 Hz accel / 200 Hz Device Motion，约每秒批量
-  交付，承担 Impact 与完整算法精修。
+  交付，承担 Impact、完整算法精修，并从 Device Motion **抽稀**出约 100 Hz
+  端上轨迹 / 触觉（不得再并行打开 `CMMotionManager` Device Motion）；
+- `CMMotionManager`：仅用于 Series 5 / 高采样失败后的 100 Hz compat 回退。
 
 因此采用双轨，而不是把 800 Hz 原始流强行实时传到 iPhone：
 
-1. **Preview rail**：Watch 本地计算，`PreviewPacketV1` 尽快发送；
+1. **Preview rail**：Watch 本地计算（batched 抽稀或 compat），`PreviewPacketV1` 尽快发送；
 2. **Fidelity rail**：`PackedCaptureV2` 原子落盘，`transferFile` + ACK；
 3. **Final rail**：Python `analyze_swing` 返回 64 点精修轨迹、高阶指标与质量门。
 
@@ -76,8 +77,10 @@ mean ≤10 cm / P95 ≤17 cm，相位平均绝对时间误差 P95 ≤40 ms。该
 
 ## 风险与真机硬门
 
-1. Series 8+ 同时运行 `CMMotionManager` 与 batched Device Motion 需真机确认资源
-   竞争、掉样和功耗；任何失败不得中断 fidelity rail。
+1. Series 8+ **不得**同时打开 `CMMotionManager` 与 `CMBatchedSensorManager`
+   Device Motion。真机上双开会让 batched 轨立刻失败（表现为一点「开始采集」就
+   「出错」）。Preview / 触觉改从 batched Device Motion 抽稀到约 100 Hz；若高采
+   样启动仍失败且几乎无样本，自动回退到 100 Hz compat，不得直接中断整杆。
 2. Series 5 只运行 100 Hz rail，Impact 精度不得标成 high-rate。
 3. 模型发布门必须包含独立生成器、真实 Watch、optical-aligned 数据，不能只看训练
    合成集。

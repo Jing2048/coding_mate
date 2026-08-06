@@ -25,7 +25,7 @@ struct SwingCaptureView: View {
             Color.clear
         }
         .toolbar(.hidden, for: .navigationBar)
-        .onAppear { capture.refreshCapability() }
+        .onAppear { capture.preparePermissions() }
     }
 
     // MARK: - Rate trust signal (icon + text, not color alone)
@@ -253,7 +253,7 @@ struct SwingCaptureView: View {
                 ? "完整分析将在 iPhone 更新"
                 : "腕部轨迹预览"
         case .failed:
-            "采集未完成，请重试"
+            capture.failureMessage ?? "采集未完成，请重试"
         case .unsupported:
             "需要支持 Core Motion 的 Apple Watch"
         case .recording:
@@ -268,6 +268,8 @@ struct SwingCaptureView: View {
                 return nil
             }
             return "\(wristQualityDescription)。完整分析将在 iPhone 更新"
+        case .failed:
+            return "点按重试。若刚拒绝权限，请到设置中开启。"
         case .idle:
             return nil
         default:

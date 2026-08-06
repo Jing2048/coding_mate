@@ -46,6 +46,11 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     private var deviceMotionTask: Task<Void, Never>?
     private var sessionID = UUID()
     private var livePreviewSampleCounter = 0
+    /// After a high-rate start failure, stay on the 100 Hz path for this launch.
+    private var preferCompatOnly = false
+    /// Bumped whenever sensor streams are (re)started so teardown errors from an
+    /// old high-rate task cannot fail a healthy compat fallback session.
+    private var sensorEpoch = 0
 
     /// Series 8 / Ultra+ high-rate path.
     var highRateSupported: Bool {
@@ -64,8 +69,13 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
 
     var isCompatMode: Bool { captureMode == .compat }
 
+    var failureMessage: String? {
+        if case let .failed(message) = state { return message }
+        return nil
+    }
+
     func refreshCapability() {
-        if highRateSupported {
+        if highRateSupported, !preferCompatOnly {
             captureMode = .highRate
             displayAccelerometerHz = 800
             displayDeviceMotionHz = 200
@@ -80,6 +90,15 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         }
     }
 
+    /// Warm HealthKit + capability checks so the first Start is less likely to
+    /// race the system permission sheets.
+    func preparePermissions() {
+        refreshCapability()
+        Task {
+            try? await authorizeHealthKit()
+        }
+    }
+
     func start() {
         guard state == .idle || state == .ready else { return }
         refreshCapability()
@@ -88,6 +107,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             return
         }
 
+        teardownSession(playHaptic: false)
         state = .preparing
         sessionID = UUID()
         accelerometerSamples = 0
@@ -103,10 +123,11 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         Task {
             do {
                 try await authorizeHealthKit()
+                try ensureWorkoutSharingAuthorized()
                 await buffer.reset()
                 try beginWorkout()
             } catch {
-                state = .failed(error.localizedDescription)
+                state = .failed(Self.userFacingMessage(for: error))
             }
         }
     }
@@ -137,7 +158,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                 state = .ready
                 WKInterfaceDevice.current().play(.success)
             } catch {
-                state = .failed(error.localizedDescription)
+                state = .failed(Self.userFacingMessage(for: error))
                 WKInterfaceDevice.current().play(.failure)
             }
         }
@@ -160,6 +181,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             healthStore: healthStore,
             configuration: configuration
         )
+        workoutSession.delegate = self
         let builder = workoutSession.associatedWorkoutBuilder()
         builder.dataSource = HKLiveWorkoutDataSource(
             healthStore: healthStore,
@@ -174,7 +196,11 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 guard success else {
-                    self.state = .failed(error?.localizedDescription ?? "Workout failed")
+                    self.state = .failed(
+                        Self.userFacingMessage(
+                            for: error ?? CaptureSetupError.workoutFailed
+                        )
+                    )
                     return
                 }
                 self.state = .recording
@@ -185,21 +211,25 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
     }
 
     private func startSensorStreams() {
-        if highRateSupported {
+        sensorEpoch += 1
+        let epoch = sensorEpoch
+        let useHighRate = highRateSupported && !preferCompatOnly
+        if useHighRate {
             captureMode = .highRate
             displayAccelerometerHz = 800
             displayDeviceMotionHz = 200
-            startLivePreviewStream()
-            startHighRateStreams()
+            // Fidelity rail only. Live preview is derived from batched Device
+            // Motion — never start CMMotionManager alongside batched sensors.
+            startHighRateStreams(epoch: epoch)
         } else {
             captureMode = .compat
             displayAccelerometerHz = 100
             displayDeviceMotionHz = 100
-            startCompatStreams()
+            startCompatStreams(epoch: epoch)
         }
     }
 
-    private func startHighRateStreams() {
+    private func startHighRateStreams(epoch: Int) {
         accelerometerTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -217,10 +247,12 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                     let counts = await buffer.counts()
                     accelerometerSamples = counts.accelerometer
                 }
+            } catch is CancellationError {
+                return
             } catch where Task.isCancelled {
                 return
             } catch {
-                failCapture(error)
+                handleSensorFailure(error, rail: .accelerometer, epoch: epoch)
             }
         }
 
@@ -233,18 +265,24 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                     try await buffer.appendDeviceMotion(samples)
                     let counts = await buffer.counts()
                     deviceMotionSamples = counts.deviceMotion
+                    // ~200 Hz batches → keep every other sample for the 100 Hz
+                    // causal preview / haptic rail without opening CMMotionManager.
+                    for (index, motion) in batch.enumerated() where index.isMultiple(of: 2) {
+                        consumeLivePreview(motion)
+                    }
                 }
+            } catch is CancellationError {
+                return
             } catch where Task.isCancelled {
                 return
             } catch {
-                failCapture(error)
+                handleSensorFailure(error, rail: .deviceMotion, epoch: epoch)
             }
         }
     }
 
-    private func startCompatStreams() {
-        // Series 5 / legacy path: request 100 Hz. Actual delivered rate is
-        // measured from timestamps and written into the capture payload.
+    private func startCompatStreams(epoch: Int) {
+        // Series 5 / legacy path, or high-rate fallback: request 100 Hz.
         let interval = 1.0 / 100.0
         motionManager.accelerometerUpdateInterval = interval
         motionManager.deviceMotionUpdateInterval = interval
@@ -252,7 +290,9 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         let sensorBuffer = buffer
         motionManager.startAccelerometerUpdates(to: motionQueue) { [weak self] data, error in
             if let error {
-                Task { @MainActor in self?.failCapture(error) }
+                Task { @MainActor in
+                    self?.handleSensorFailure(error, rail: .accelerometer, epoch: epoch)
+                }
                 return
             }
             guard let data else { return }
@@ -273,7 +313,7 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                     }
                 } catch {
                     await MainActor.run {
-                        self?.failCapture(error)
+                        self?.handleSensorFailure(error, rail: .accelerometer, epoch: epoch)
                     }
                 }
             }
@@ -284,7 +324,9 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
             to: motionQueue
         ) { [weak self] data, error in
             if let error {
-                Task { @MainActor in self?.failCapture(error) }
+                Task { @MainActor in
+                    self?.handleSensorFailure(error, rail: .deviceMotion, epoch: epoch)
+                }
                 return
             }
             guard let data else { return }
@@ -300,25 +342,9 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
                     }
                 } catch {
                     await MainActor.run {
-                        self?.failCapture(error)
+                        self?.handleSensorFailure(error, rail: .deviceMotion, epoch: epoch)
                     }
                 }
-            }
-        }
-    }
-
-    /// Series 8+ keeps the low-latency 100 Hz rail active alongside the
-    /// 800/200 Hz batched fidelity rail. Failure only removes preview/haptics;
-    /// it must never abort the lossless capture.
-    private func startLivePreviewStream() {
-        motionManager.deviceMotionUpdateInterval = 1.0 / 100.0
-        motionManager.startDeviceMotionUpdates(
-            using: .xArbitraryZVertical,
-            to: motionQueue
-        ) { [weak self] data, _ in
-            guard let self, let data else { return }
-            Task { @MainActor in
-                self.consumeLivePreview(data)
             }
         }
     }
@@ -336,6 +362,58 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         }
     }
 
+    private enum SensorRail {
+        case accelerometer
+        case deviceMotion
+    }
+
+    /// High-rate start failures fall back to the 100 Hz path instead of aborting
+    /// the swing. Preview/haptic issues never kill an already healthy fidelity rail.
+    private func handleSensorFailure(
+        _ error: Error,
+        rail: SensorRail,
+        epoch: Int
+    ) {
+        guard epoch == sensorEpoch else { return }
+        if Task.isCancelled || state == .processing || state == .ready {
+            return
+        }
+        if case .failed = state { return }
+
+        let hasFidelity =
+            accelerometerSamples >= 16 && deviceMotionSamples >= 8
+        if captureMode == .highRate, hasFidelity, rail == .deviceMotion {
+            // Keep lossless accel/motion already buffered; drop only live preview.
+            return
+        }
+
+        if
+            captureMode == .highRate,
+            !preferCompatOnly,
+            compatSupported,
+            accelerometerSamples < 16
+        {
+            fallbackToCompat(reason: error)
+            return
+        }
+
+        failCapture(error)
+    }
+
+    private func fallbackToCompat(reason: Error) {
+        preferCompatOnly = true
+        stopSensorStreams()
+        captureMode = .compat
+        displayAccelerometerHz = 100
+        displayDeviceMotionHz = 100
+        // Keep the active workout; only switch the motion source.
+        // startSensorStreams bumps sensorEpoch so stale high-rate errors die.
+        startSensorStreams()
+        #if DEBUG
+        print("High-rate capture fell back to compat: \(reason.localizedDescription)")
+        #endif
+    }
+
     private func stopSensorStreams() {
         accelerometerTask?.cancel()
         deviceMotionTask?.cancel()
@@ -347,11 +425,21 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         motionManager.stopDeviceMotionUpdates()
     }
 
-    private func failCapture(_ error: Error) {
+    private func teardownSession(playHaptic: Bool) {
         stopSensorStreams()
-        workoutSession?.end()
-        state = .failed(error.localizedDescription)
-        WKInterfaceDevice.current().play(.failure)
+        if let session = workoutSession {
+            session.end()
+        }
+        workoutSession = nil
+        workoutBuilder = nil
+        if playHaptic {
+            WKInterfaceDevice.current().play(.failure)
+        }
+    }
+
+    private func failCapture(_ error: Error) {
+        teardownSession(playHaptic: true)
+        state = .failed(Self.userFacingMessage(for: error))
     }
 
     private func makePayload(
@@ -436,5 +524,69 @@ final class WorkoutCaptureManager: NSObject, ObservableObject {
         // Void generic cannot be inferred.
         let workout = HKObjectType.workoutType()
         try await healthStore.requestAuthorization(toShare: [workout], read: [])
+    }
+
+    private func ensureWorkoutSharingAuthorized() throws {
+        let status = healthStore.authorizationStatus(for: .workoutType())
+        // Only hard-fail on explicit denial. `.notDetermined` can still succeed
+        // after the request sheet on some watchOS builds.
+        if status == .sharingDenied {
+            throw CaptureSetupError.healthKitDenied
+        }
+    }
+
+    private static func userFacingMessage(for error: Error) -> String {
+        if let setup = error as? CaptureSetupError {
+            return setup.errorDescription ?? setup.localizedDescription
+        }
+        let ns = error as NSError
+        if ns.domain == "CMErrorDomain" {
+            switch ns.code {
+            case 105, 107:
+                return "无法访问运动传感器，请在系统设置中允许“运动与健身”。"
+            case 109:
+                return "需要先开始高尔夫体能训练会话，请重试。"
+            default:
+                break
+            }
+        }
+        let text = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty {
+            return "采集未完成，请重试"
+        }
+        return text
+    }
+}
+
+extension WorkoutCaptureManager: HKWorkoutSessionDelegate {
+    nonisolated func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didChangeTo toState: HKWorkoutSessionState,
+        from fromState: HKWorkoutSessionState,
+        date: Date
+    ) {}
+
+    nonisolated func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didFailWithError error: Error
+    ) {
+        Task { @MainActor in
+            guard self.state == .preparing || self.state == .recording else { return }
+            self.failCapture(error)
+        }
+    }
+}
+
+private enum CaptureSetupError: LocalizedError {
+    case healthKitDenied
+    case workoutFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .healthKitDenied:
+            return "请允许写入体能训练，否则无法采集挥杆。"
+        case .workoutFailed:
+            return "无法启动高尔夫训练会话，请重试。"
+        }
     }
 }
